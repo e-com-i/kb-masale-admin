@@ -1,0 +1,16 @@
+./.env.local
+./.gitignore
+./FILE_STRUCTURE.txt
+./QUICKSTART.md
+./README.md
+./app/api/github/route.ts
+./app/globals.css
+./app/layout.tsx
+./app/page.tsx
+./next.config.js
+./package.json
+./postcss.config.js
+./setup.bat
+./setup.sh
+./tailwind.config.js
+./tsconfig.json
