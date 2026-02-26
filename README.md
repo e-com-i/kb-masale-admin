@@ -249,3 +249,4 @@ Having issues? Open an issue on GitHub or contact support.
 ---
 
 **Built with ❤️ using Next.js 14, TypeScript, and Tailwind CSS**
+
