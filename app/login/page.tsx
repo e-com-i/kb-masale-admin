@@ -97,7 +97,7 @@ function LoginContent() {
                 <ShoppingCart className="w-12 h-12 text-white" />
               </div>
             </div>
-            <h1 className="text-2xl font-bold text-white mb-2">E-Commerce Admin</h1>
+            <h1 className="text-2xl font-bold text-white mb-2">KB Masale Admin</h1>
             <p className="text-blue-100">Secure Admin Portal</p>
           </div>
 

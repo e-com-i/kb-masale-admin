@@ -6,7 +6,7 @@ import Providers from './providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'E-Commerce Admin',
+  title: 'KB Masale Admin',
   description: 'Admin panel for managing categories, subcategories, and products',
 }
 

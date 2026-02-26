@@ -204,7 +204,7 @@ export async function POST(request: NextRequest) {
         type: 'commit',
         tagger: {
           name: publishedBy || 'Admin Panel',
-          email: 'admin@ecommerce.com',
+          email: 'admin@kbmasale.com',
           date: new Date().toISOString(),
         },
       });

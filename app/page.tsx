@@ -2969,7 +2969,7 @@ export default function AdminPanel() {
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
               <ShoppingCart className="w-8 h-8 text-blue-600" />
-              <h1 className="text-2xl font-bold text-gray-900">E-Commerce Admin</h1>
+              <h1 className="text-2xl font-bold text-gray-900">KB Masale Admin</h1>
             </div>
             <div className="flex items-center gap-4">
               <button

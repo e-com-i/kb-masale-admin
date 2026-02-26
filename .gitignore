@@ -1,5 +1,6 @@
 .env.local
 .idea/
+.idea
 
 # dependencies
 /node_modules
