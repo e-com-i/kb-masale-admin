@@ -523,27 +523,24 @@ export default function AdminPanel() {
     ));
   };
 
-  // Check deployment status periodically
-  const checkDeploymentStatus = async (): Promise<void> => {
-    try {
-      const response = await fetch('/api/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'get-b2c-deployment-status' }),
-      });
-      const data = await response.json();
-
-      if (data.success) {
-        setDeploymentStatus({
-          hasWorkflows: data.hasDeployment,
-          status: data.deployment?.state,
-          conclusion: data.deployment?.state === 'READY' ? 'success' : data.deployment?.state === 'ERROR' ? 'failure' : undefined,
-          url: data.deployment?.prodUrl || data.deployment?.url,
-        });
-      }
-    } catch (error) {
-      console.error('Failed to check deployment status:', error);
-    }
+  // Check deployment status — returns data so callers don't rely on stale state
+  const checkDeploymentStatus = async () => {
+    const response = await fetch('/api/github', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get-b2c-deployment-status' }),
+    });
+    if (!response.ok) throw new Error(`Deployment status check failed (HTTP ${response.status})`);
+    const data = await response.json();
+    if (!data.success) throw new Error(data.error || 'Failed to check deployment status');
+    const status = {
+      hasWorkflows: data.hasDeployment,
+      status: data.deployment?.state,
+      conclusion: data.deployment?.state === 'READY' ? 'success' : data.deployment?.state === 'ERROR' ? 'failure' : undefined,
+      url: data.deployment?.prodUrl || data.deployment?.url,
+    };
+    setDeploymentStatus(status);
+    return status;
   };
 
   // Publish new release with step-by-step progress
@@ -586,9 +583,10 @@ export default function AdminPanel() {
 
       const releaseData = await releaseResponse.json();
 
-      if (!releaseData.success) {
-        updatePublishStep('create-tag', { status: 'failed', message: releaseData.error || 'Failed to create tag' });
-        throw new Error(releaseData.error || 'Failed to create tag');
+      if (!releaseResponse.ok || !releaseData.success) {
+        const msg = releaseData.error || `HTTP ${releaseResponse.status}: Failed to create tag`;
+        updatePublishStep('create-tag', { status: 'failed', message: msg });
+        throw new Error(msg);
       }
 
       updatePublishStep('create-tag', {
@@ -617,9 +615,10 @@ export default function AdminPanel() {
 
       const envData = await envResponse.json();
 
-      if (!envData.success) {
-        updatePublishStep('update-b2c-env', { status: 'failed', message: envData.error || 'Failed to update Vercel env' });
-        throw new Error(envData.error || 'Failed to update Vercel environment');
+      if (!envResponse.ok || !envData.success) {
+        const msg = envData.error || `HTTP ${envResponse.status}: Failed to update Vercel env`;
+        updatePublishStep('update-b2c-env', { status: 'failed', message: msg });
+        throw new Error(msg);
       }
 
       updatePublishStep('update-b2c-env', {
@@ -628,16 +627,16 @@ export default function AdminPanel() {
         details: envData.deploymentUrl || 'Deployment triggered',
       });
 
-      // Step 3: Vercel deployment already triggered — poll for status
+      // Step 3: Poll Vercel for deployment status
       updatePublishStep('trigger-deploy', { status: 'in_progress', message: 'Vercel building...' });
 
       await new Promise(resolve => setTimeout(resolve, 5000));
-      await checkDeploymentStatus();
+      const deployStatus = await checkDeploymentStatus();
 
       updatePublishStep('trigger-deploy', {
         status: 'completed',
-        message: `Vercel — ${deploymentStatus?.status?.toLowerCase() || 'building'}`,
-        details: 'https://kbmasale.com',
+        message: `Vercel — ${deployStatus.status?.toLowerCase() || 'building'}`,
+        details: deployStatus.url || 'https://kbmasale.com',
       });
 
       setPublishedVersion(newVersion);
@@ -645,6 +644,12 @@ export default function AdminPanel() {
       fetchLatestRelease();
 
     } catch (error: any) {
+      // Mark any still-pending or in-progress steps as failed
+      setPublishSteps(prev => prev.map(step =>
+        step.status === 'in_progress' || step.status === 'pending'
+          ? { ...step, status: 'failed', message: error.message }
+          : step
+      ));
       showMessage('error', error.message || 'Failed to publish release');
     } finally {
       setPublishLoading(false);
