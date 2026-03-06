@@ -556,8 +556,8 @@ export default function AdminPanel() {
     const steps: PublishStep[] = [
       { id: 'create-tag', label: 'Creating Git tag in json-data-keeper', status: 'pending' },
       { id: 'create-release', label: 'Creating GitHub Release', status: 'pending' },
-      { id: 'update-b2c-env', label: 'Updating B2C app environment files', status: 'pending' },
-      { id: 'trigger-deploy', label: 'Checking CI/CD deployment', status: 'pending' },
+      { id: 'update-b2c-env', label: 'Updating Vercel env & triggering deployment', status: 'pending' },
+      { id: 'track-deployment', label: 'Tracking Vercel deployment', status: 'pending' },
       { id: 'verify-version', label: 'Verifying live site version', status: 'pending' },
     ];
 
@@ -628,17 +628,68 @@ export default function AdminPanel() {
         details: envData.deploymentUrl || 'Deployment triggered',
       });
 
-      // Step 3: Poll Vercel for deployment status
-      updatePublishStep('trigger-deploy', { status: 'in_progress', message: 'Vercel building...' });
+      // Step 3: Poll Vercel deployment by ID until READY or ERROR (max ~3.5 min)
+      updatePublishStep('track-deployment', { status: 'in_progress', message: 'Deployment triggered, waiting for build...' });
 
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      const deployStatus = await checkDeploymentStatus();
+      const deploymentId = envData.deploymentId;
+      let inspectorUrl = envData.inspectorUrl || null;
+      const DEPLOY_MAX_ATTEMPTS = 21; // 21 * 10s = 3.5 min
+      let deploymentReady = false;
 
-      updatePublishStep('trigger-deploy', {
-        status: 'completed',
-        message: `Vercel — ${deployStatus.status?.toLowerCase() || 'building'}`,
-        details: deployStatus.url || 'https://kbmasale.com',
-      });
+      for (let attempt = 1; attempt <= DEPLOY_MAX_ATTEMPTS; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
+        const pollRes = await fetch('/api/github', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'get-workflow-run', runId: deploymentId }),
+        });
+
+        if (!pollRes.ok) {
+          const pollErr = await pollRes.json();
+          const msg = pollErr.error || `HTTP ${pollRes.status}: Failed to poll deployment`;
+          updatePublishStep('track-deployment', { status: 'failed', message: msg, details: inspectorUrl });
+          throw new Error(msg);
+        }
+
+        const pollData = await pollRes.json();
+        const state = pollData.deployment?.state;
+        inspectorUrl = pollData.deployment?.inspectorUrl || inspectorUrl;
+
+        if (state === 'READY') {
+          updatePublishStep('track-deployment', {
+            status: 'completed',
+            message: `Deployment live! (${attempt * 10}s)`,
+            details: inspectorUrl,
+          });
+          deploymentReady = true;
+          break;
+        }
+
+        if (state === 'ERROR' || state === 'CANCELED') {
+          updatePublishStep('track-deployment', {
+            status: 'failed',
+            message: `Deployment ${state.toLowerCase()}`,
+            details: inspectorUrl,
+          });
+          throw new Error(`Vercel deployment ${state.toLowerCase()}`);
+        }
+
+        updatePublishStep('track-deployment', {
+          status: 'in_progress',
+          message: `${state?.toLowerCase() || 'building'}... (${attempt * 10}s elapsed)`,
+          details: inspectorUrl,
+        });
+      }
+
+      if (!deploymentReady) {
+        updatePublishStep('track-deployment', {
+          status: 'failed',
+          message: 'Deployment timed out after 3.5 minutes',
+          details: inspectorUrl,
+        });
+        throw new Error('Deployment timed out');
+      }
 
       // Step 4: Poll live site until version matches (max 2 min)
       updatePublishStep('verify-version', { status: 'in_progress', message: 'Waiting for deployment to go live...' });
@@ -2352,7 +2403,11 @@ export default function AdminPanel() {
                           )}
                           {step.details && (
                             <code className="text-xs bg-white/50 px-2 py-1 rounded mt-2 block break-all text-gray-500">
-                              {step.details}
+                              {step.details.startsWith('http') ? (
+                                <a href={step.details} target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-600">
+                                  {step.details}
+                                </a>
+                              ) : step.details}
                             </code>
                           )}
                         </div>

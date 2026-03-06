@@ -320,6 +320,7 @@ export async function POST(request: NextRequest) {
         success: true,
         deploymentId: deployData.id,
         deploymentUrl: deployData.url ? `https://${deployData.url}` : null,
+        inspectorUrl: deployData.inspectorUrl || null,
         message: `NEXT_PUBLIC_DATA_VERSION set to ${tagName}, deployment triggered`,
       });
     }
@@ -362,12 +363,16 @@ export async function POST(request: NextRequest) {
       );
       const data = await res.json();
 
+      if (!res.ok) {
+        return NextResponse.json({ error: `Failed to poll deployment: HTTP ${res.status}` }, { status: 500 });
+      }
       return NextResponse.json({
         success: true,
         deployment: {
           id: data.id,
           state: data.status,
-          url: `https://${data.url}`,
+          url: data.url ? `https://${data.url}` : null,
+          inspectorUrl: data.inspectorUrl || null,
           createdAt: data.createdAt,
         }
       });
