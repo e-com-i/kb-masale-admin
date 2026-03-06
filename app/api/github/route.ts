@@ -305,6 +305,7 @@ export async function POST(request: NextRequest) {
         headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: 'kbmasale',
+          target: 'production',
           gitSource: { type: 'github', repoId: 1030670981, ref: B2C_BRANCH },
         }),
       });
