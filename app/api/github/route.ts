@@ -299,6 +299,12 @@ export async function POST(request: NextRequest) {
       });
       const deployData = await deployRes.json();
 
+      if (!deployRes.ok) {
+        return NextResponse.json({
+          error: `Vercel deployment trigger failed: ${deployData.error?.message || JSON.stringify(deployData)}`,
+        }, { status: 500 });
+      }
+
       return NextResponse.json({
         success: true,
         deploymentId: deployData.id,
