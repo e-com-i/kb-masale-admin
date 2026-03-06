@@ -2,17 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Octokit } from '@octokit/rest';
 
 // IMPORTANT: Add your GitHub Personal Access Token here or use environment variable
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || 'YOUR_GITHUB_TOKEN_HERE';
+const GITHUB_TOKEN = process.env.KB_GITHUB_TOKEN || 'YOUR_GITHUB_TOKEN_HERE';
+const B2C_GITHUB_TOKEN = process.env.KB_B2C_GITHUB_TOKEN || 'YOUR_B2C_GITHUB_TOKEN_HERE';
 const GITHUB_OWNER = 'iFrugal';
 const GITHUB_REPO = 'json-data-keeper';
 const GITHUB_BRANCH = 'main';
 const BASE_PATH = 'kb-v2';
 
 // B2C App Repository
+const B2C_OWNER = 'e-com-i';
 const B2C_REPO = 'test-portal';
 const B2C_BRANCH = 'main';
 
+// Vercel
+const VERCEL_TOKEN = process.env.KB_VERCEL_TOKEN || '';
+const VERCEL_PROJECT_ID = process.env.KB_VERCEL_PROJECT_ID || '';
+
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
+const b2cOctokit = new Octokit({ auth: B2C_GITHUB_TOKEN });
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -238,182 +245,113 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Update B2C App environment files with new tag
+    // Update NEXT_PUBLIC_DATA_VERSION in Vercel and trigger redeployment
     if (action === 'update-b2c-env') {
-      const { tagName, publishedBy } = body;
+      const { tagName } = body;
 
       if (!tagName) {
         return NextResponse.json({ error: 'Tag name is required' }, { status: 400 });
       }
 
-      // Only update .env file (not .env.local or .env.production as they may have local overrides)
-      const envFiles = ['.env'];
-      const results: { file: string; status: 'updated' | 'created' | 'skipped'; error?: string }[] = [];
-      const cdnBaseUrl = `https://cdn.jsdelivr.net/gh/${GITHUB_OWNER}/${GITHUB_REPO}@${tagName}/${BASE_PATH}`;
+      // Step 1: Find existing NEXT_PUBLIC_DATA_VERSION env var
+      const listRes = await fetch(
+        `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env`,
+        { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
+      );
+      const listData = await listRes.json();
+      const existing = listData.envs?.find((e: any) => e.key === 'NEXT_PUBLIC_DATA_VERSION');
 
-      for (const envFile of envFiles) {
-        try {
-          // Try to get existing file
-          let existingContent = '';
-          let existingSha: string | undefined;
-
-          try {
-            const { data } = await octokit.repos.getContent({
-              owner: GITHUB_OWNER,
-              repo: B2C_REPO,
-              path: envFile,
-              ref: B2C_BRANCH,
-            });
-
-            if ('content' in data) {
-              existingContent = Buffer.from(data.content, 'base64').toString('utf-8');
-              existingSha = data.sha;
-            }
-          } catch (e: any) {
-            if (e.status !== 404) throw e;
-            // File doesn't exist, we'll create it
+      // Step 2: Create or update the env var
+      if (existing) {
+        await fetch(
+          `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env/${existing.id}`,
+          {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: tagName }),
           }
-
-          // Update the environment variables to match existing format
-          let newContent: string;
-
-          // Regex patterns to match existing variables (with optional quotes and spaces)
-          const apiUrlRegex = /^NEXT_PUBLIC_API_URL\s*=\s*['"]?[^'"\n]*['"]?/m;
-          const cdnUrlRegex = /^CDN_BASE_URL\s*=\s*['"]?[^'"\n]*['"]?/m;
-
-          if (existingContent) {
-            newContent = existingContent;
-
-            // Update NEXT_PUBLIC_API_URL
-            if (apiUrlRegex.test(newContent)) {
-              newContent = newContent.replace(apiUrlRegex, `NEXT_PUBLIC_API_URL='${cdnBaseUrl}'`);
-            } else {
-              newContent = newContent.trim() + `\n\nNEXT_PUBLIC_API_URL='${cdnBaseUrl}'\n`;
-            }
-
-            // Update CDN_BASE_URL
-            if (cdnUrlRegex.test(newContent)) {
-              newContent = newContent.replace(cdnUrlRegex, `CDN_BASE_URL='${cdnBaseUrl}'`);
-            } else {
-              newContent = newContent.trim() + `\nCDN_BASE_URL='${cdnBaseUrl}'\n`;
-            }
-          } else {
-            // Create new file with the expected format
-            newContent = `NEXT_PUBLIC_API_URL='${cdnBaseUrl}'
-
-NEXT_PUBLIC_ACCESS_KEY=3bc45ca0-44a9-4805-b5da-7a4e3e58e151
-
-CDN_BASE_URL='${cdnBaseUrl}'
-`;
+        );
+      } else {
+        await fetch(
+          `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              key: 'NEXT_PUBLIC_DATA_VERSION',
+              value: tagName,
+              type: 'plain',
+              target: ['production', 'preview'],
+            }),
           }
+        );
+      }
 
-          // Commit the file
-          const params: any = {
-            owner: GITHUB_OWNER,
-            repo: B2C_REPO,
-            path: envFile,
-            message: `chore: Update data version to ${tagName}\n\nPublished by ${publishedBy || 'Admin Panel'}`,
-            content: Buffer.from(newContent).toString('base64'),
-            branch: B2C_BRANCH,
-          };
+      // Step 3: Trigger a new Vercel deployment
+      const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'kbmasale',
+          gitSource: { type: 'github', repoId: 1030670981, ref: B2C_BRANCH },
+          projectId: VERCEL_PROJECT_ID,
+        }),
+      });
+      const deployData = await deployRes.json();
 
-          if (existingSha) {
-            params.sha = existingSha;
-          }
+      return NextResponse.json({
+        success: true,
+        deploymentId: deployData.id,
+        deploymentUrl: deployData.url ? `https://${deployData.url}` : null,
+        message: `NEXT_PUBLIC_DATA_VERSION set to ${tagName}, deployment triggered`,
+      });
+    }
 
-          await octokit.repos.createOrUpdateFileContents(params);
+    // Get B2C deployment status via Vercel
+    if (action === 'get-b2c-deployment-status') {
+      const res = await fetch(
+        `https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&limit=1`,
+        { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
+      );
+      const data = await res.json();
+      const latest = data.deployments?.[0];
 
-          results.push({
-            file: envFile,
-            status: existingSha ? 'updated' : 'created'
-          });
-
-        } catch (error: any) {
-          results.push({
-            file: envFile,
-            status: 'skipped',
-            error: error.message
-          });
-        }
+      if (!latest) {
+        return NextResponse.json({ success: true, hasDeployment: false });
       }
 
       return NextResponse.json({
         success: true,
-        results,
-        message: `B2C environment files updated with ${tagName}`
+        hasDeployment: true,
+        deployment: {
+          id: latest.uid,
+          state: latest.state,           // BUILDING | READY | ERROR | QUEUED
+          url: `https://${latest.url}`,
+          prodUrl: 'https://kbmasale.com',
+          createdAt: latest.createdAt,
+          commit: latest.meta?.githubCommitMessage?.split('\n')[0] || '',
+        }
       });
     }
 
-    // Get B2C deployment/workflow status
-    if (action === 'get-b2c-deployment-status') {
-      try {
-        // Get the latest workflow runs
-        const { data } = await octokit.actions.listWorkflowRunsForRepo({
-          owner: GITHUB_OWNER,
-          repo: B2C_REPO,
-          per_page: 5,
-        });
-
-        const latestRun = data.workflow_runs[0];
-
-        if (latestRun) {
-          return NextResponse.json({
-            success: true,
-            hasWorkflows: true,
-            latestRun: {
-              id: latestRun.id,
-              name: latestRun.name,
-              status: latestRun.status,
-              conclusion: latestRun.conclusion,
-              createdAt: latestRun.created_at,
-              updatedAt: latestRun.updated_at,
-              htmlUrl: latestRun.html_url,
-            }
-          });
-        } else {
-          return NextResponse.json({
-            success: true,
-            hasWorkflows: false,
-            message: 'No workflow runs found'
-          });
-        }
-      } catch (error: any) {
-        // If no workflows configured, that's okay
-        if (error.status === 404) {
-          return NextResponse.json({
-            success: true,
-            hasWorkflows: false,
-            message: 'No GitHub Actions configured for B2C repo'
-          });
-        }
-        throw error;
-      }
-    }
-
-    // Get specific workflow run status
+    // Poll a specific Vercel deployment by ID
     if (action === 'get-workflow-run') {
       const { runId } = body;
+      if (!runId) return NextResponse.json({ error: 'Deployment ID is required' }, { status: 400 });
 
-      if (!runId) {
-        return NextResponse.json({ error: 'Run ID is required' }, { status: 400 });
-      }
-
-      const { data } = await octokit.actions.getWorkflowRun({
-        owner: GITHUB_OWNER,
-        repo: B2C_REPO,
-        run_id: runId,
-      });
+      const res = await fetch(
+        `https://api.vercel.com/v13/deployments/${runId}`,
+        { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
+      );
+      const data = await res.json();
 
       return NextResponse.json({
         success: true,
-        run: {
+        deployment: {
           id: data.id,
-          name: data.name,
-          status: data.status,
-          conclusion: data.conclusion,
-          createdAt: data.created_at,
-          updatedAt: data.updated_at,
-          htmlUrl: data.html_url,
+          state: data.status,
+          url: `https://${data.url}`,
+          createdAt: data.createdAt,
         }
       });
     }

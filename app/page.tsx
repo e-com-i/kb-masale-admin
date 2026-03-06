@@ -32,7 +32,10 @@ import {
   GitBranch,
   ExternalLink,
   Clock,
-  RefreshCw
+  RefreshCw,
+  Palette,
+  Type,
+  Sparkles
 } from 'lucide-react';
 
 // Types
@@ -163,6 +166,7 @@ export default function AdminPanel() {
   const [publishLoading, setPublishLoading] = useState(false);
   const [latestRelease, setLatestRelease] = useState<{ tag: string; name?: string; publishedAt?: string } | null>(null);
   const [newVersion, setNewVersion] = useState('');
+  const [publishedVersion, setPublishedVersion] = useState('');
   const [releaseNotes, setReleaseNotes] = useState('');
 
   // Publish Steps State for live updates
@@ -185,7 +189,220 @@ export default function AdminPanel() {
   // More Details expanded state
   const [showMoreDetails, setShowMoreDetails] = useState(false);
 
+  // Composite Image Generation State (Blinkit-style)
+  const [compositeLabel, setCompositeLabel] = useState('');
+  const [compositeBgColor, setCompositeBgColor] = useState('#FFF5E6');
+  const [compositeTextColor, setCompositeTextColor] = useState('#1a1a1a');
+  const [compositePreview, setCompositePreview] = useState<string | null>(null);
+  const [compositeFile, setCompositeFile] = useState<File | null>(null);
+  const [rawPhotoPreview, setRawPhotoPreview] = useState<string | null>(null);
+  const [rawPhotoFile, setRawPhotoFile] = useState<File | null>(null);
+  // Edit mode composite state
+  const [editCompositeLabel, setEditCompositeLabel] = useState('');
+  const [editCompositeBgColor, setEditCompositeBgColor] = useState('#FFF5E6');
+  const [editCompositeTextColor, setEditCompositeTextColor] = useState('#1a1a1a');
+  const [editCompositePreview, setEditCompositePreview] = useState<string | null>(null);
+  const [editRawPhotoPreview, setEditRawPhotoPreview] = useState<string | null>(null);
+  const [editRawPhotoFile, setEditRawPhotoFile] = useState<File | null>(null);
+
+  // Preset background colors for category cards
+  const bgColorPresets = [
+    { color: '#FFF5E6', name: 'Warm Cream' },
+    { color: '#E8F5E9', name: 'Mint Green' },
+    { color: '#FFF3E0', name: 'Light Orange' },
+    { color: '#F3E5F5', name: 'Soft Purple' },
+    { color: '#E3F2FD', name: 'Light Blue' },
+    { color: '#FBE9E7', name: 'Soft Red' },
+    { color: '#FFFDE7', name: 'Light Yellow' },
+    { color: '#F1F8E9', name: 'Lime Green' },
+    { color: '#FCE4EC', name: 'Soft Pink' },
+    { color: '#E0F2F1', name: 'Teal' },
+  ];
+
   const BASE_IMAGE_URL = 'https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@main/kb-v2';
+
+  // Generate composite image with Canvas (Blinkit-style: photo + label baked in)
+  const generateCompositeImage = async (
+    photoDataUrl: string,
+    label: string,
+    bgColor: string,
+    textColor: string
+  ): Promise<{ dataUrl: string; file: File }> => {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      // 400x400 for high-res, works well for grid-cols-3 to grid-cols-10
+      const SIZE = 400;
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('Canvas not supported')); return; }
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        // 1. Fill card background white, clip to rounded rect
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(0, 0, SIZE, SIZE, 24);
+        } else {
+          // Polyfill for older browsers
+          const r = 24;
+          ctx.moveTo(r, 0);
+          ctx.lineTo(SIZE - r, 0);
+          ctx.quadraticCurveTo(SIZE, 0, SIZE, r);
+          ctx.lineTo(SIZE, SIZE - r);
+          ctx.quadraticCurveTo(SIZE, SIZE, SIZE - r, SIZE);
+          ctx.lineTo(r, SIZE);
+          ctx.quadraticCurveTo(0, SIZE, 0, SIZE - r);
+          ctx.lineTo(0, r);
+          ctx.quadraticCurveTo(0, 0, r, 0);
+          ctx.closePath();
+        }
+        ctx.fill();
+        ctx.clip();
+
+        // 2. Draw photo container box (bgColor) with padding inside the card
+        const containerMargin = SIZE * 0.04;
+        const photoAreaHeight = SIZE * 0.65;
+        ctx.fillStyle = bgColor;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(containerMargin, containerMargin, SIZE - containerMargin * 2, photoAreaHeight - containerMargin, 16);
+        } else {
+          ctx.rect(containerMargin, containerMargin, SIZE - containerMargin * 2, photoAreaHeight - containerMargin);
+        }
+        ctx.fill();
+
+        // 3. Draw the product photo inside the container
+        const photoTopPadding = SIZE * 0.06;
+        const photoSidePadding = SIZE * 0.10;
+        const availableWidth = SIZE - photoSidePadding * 2;
+        const availableHeight = photoAreaHeight - containerMargin - photoTopPadding;
+
+        // Maintain aspect ratio
+        const scale = Math.min(availableWidth / img.width, availableHeight / img.height);
+        const drawWidth = img.width * scale;
+        const drawHeight = img.height * scale;
+        const drawX = (SIZE - drawWidth) / 2;
+        const drawY = containerMargin + photoTopPadding + (availableHeight - drawHeight) / 2;
+
+        ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+
+        // 4. Draw label text on the white area below the photo container
+        const textAreaY = photoAreaHeight + SIZE * 0.01;
+        const textAreaHeight = SIZE - textAreaY;
+        const maxTextWidth = SIZE - 32;
+
+        // Auto-size font: start at 36px, shrink to fit
+        let fontSize = 36;
+        ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+
+        // Word wrap and font sizing
+        const wrapText = (text: string, maxWidth: number, fSize: number): string[] => {
+          ctx.font = `bold ${fSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+          const words = text.split(' ');
+          const lines: string[] = [];
+          let currentLine = words[0] || '';
+          for (let i = 1; i < words.length; i++) {
+            const testLine = currentLine + ' ' + words[i];
+            if (ctx.measureText(testLine).width > maxWidth) {
+              lines.push(currentLine);
+              currentLine = words[i];
+            } else {
+              currentLine = testLine;
+            }
+          }
+          lines.push(currentLine);
+          return lines;
+        };
+
+        // Find best font size (max 2 lines)
+        let lines: string[] = [];
+        while (fontSize > 18) {
+          lines = wrapText(label, maxTextWidth, fontSize);
+          const lineHeight = fontSize * 1.2;
+          if (lines.length <= 2 && lines.length * lineHeight <= textAreaHeight - 16) break;
+          fontSize -= 2;
+        }
+
+        // Draw text centered in bottom area
+        ctx.fillStyle = textColor;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const lineHeight = fontSize * 1.25;
+        const totalTextHeight = lines.length * lineHeight;
+        const textStartY = textAreaY + (textAreaHeight - totalTextHeight) / 2 + lineHeight / 2;
+
+        lines.forEach((line, i) => {
+          ctx.fillText(line, SIZE / 2, textStartY + i * lineHeight);
+        });
+
+        // Convert to PNG
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Failed to generate image')); return; }
+          const dataUrl = canvas.toDataURL('image/png');
+          const file = new File([blob], 'composite.png', { type: 'image/png' });
+          resolve({ dataUrl, file });
+        }, 'image/png');
+      };
+      img.onerror = () => reject(new Error('Failed to load photo'));
+      img.src = photoDataUrl;
+    });
+  };
+
+  // Handle raw photo upload for composite generation
+  const handleRawPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>, isEdit = false) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        showMessage('error', 'Photo size should be less than 5MB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        if (isEdit) {
+          setEditRawPhotoFile(file);
+          setEditRawPhotoPreview(dataUrl);
+        } else {
+          setRawPhotoFile(file);
+          setRawPhotoPreview(dataUrl);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Generate and preview composite image
+  const generateAndPreviewComposite = async (isEdit = false) => {
+    const photoPreview = isEdit ? editRawPhotoPreview : rawPhotoPreview;
+    const label = isEdit ? editCompositeLabel : compositeLabel;
+    const bgColor = isEdit ? editCompositeBgColor : compositeBgColor;
+    const textColor = isEdit ? editCompositeTextColor : compositeTextColor;
+
+    if (!photoPreview || !label.trim()) {
+      showMessage('error', 'Please upload a photo and enter a label');
+      return;
+    }
+
+    try {
+      const { dataUrl, file } = await generateCompositeImage(photoPreview, label.trim(), bgColor, textColor);
+      if (isEdit) {
+        setEditCompositePreview(dataUrl);
+        setNewImageFile(file);
+        setImagePreview(dataUrl);
+      } else {
+        setCompositePreview(dataUrl);
+        setCompositeFile(file);
+        setAddImageFile(file);
+        setAddImagePreview(dataUrl);
+      }
+      showMessage('success', 'Composite image generated!');
+    } catch (error) {
+      showMessage('error', 'Failed to generate composite image');
+    }
+  };
 
   // Default more_details template
   const defaultMoreDetails: MoreDetails = {
@@ -318,10 +535,10 @@ export default function AdminPanel() {
 
       if (data.success) {
         setDeploymentStatus({
-          hasWorkflows: data.hasWorkflows,
-          status: data.latestRun?.status,
-          conclusion: data.latestRun?.conclusion,
-          url: data.latestRun?.htmlUrl,
+          hasWorkflows: data.hasDeployment,
+          status: data.deployment?.state,
+          conclusion: data.deployment?.state === 'READY' ? 'success' : data.deployment?.state === 'ERROR' ? 'failure' : undefined,
+          url: data.deployment?.prodUrl || data.deployment?.url,
         });
       }
     } catch (error) {
@@ -386,8 +603,8 @@ export default function AdminPanel() {
         details: releaseData.releaseUrl
       });
 
-      // Step 2: Update B2C environment files
-      updatePublishStep('update-b2c-env', { status: 'in_progress', message: 'Updating .env files...' });
+      // Step 2: Update NEXT_PUBLIC_DATA_VERSION in Vercel + trigger deployment
+      updatePublishStep('update-b2c-env', { status: 'in_progress', message: 'Updating Vercel environment...' });
 
       const envResponse = await fetch('/api/github', {
         method: 'POST',
@@ -395,45 +612,35 @@ export default function AdminPanel() {
         body: JSON.stringify({
           action: 'update-b2c-env',
           tagName: newVersion,
-          publishedBy: session?.user?.email || 'Admin',
         }),
       });
 
       const envData = await envResponse.json();
 
       if (!envData.success) {
-        updatePublishStep('update-b2c-env', { status: 'failed', message: envData.error || 'Failed to update env files' });
-        throw new Error(envData.error || 'Failed to update B2C environment');
+        updatePublishStep('update-b2c-env', { status: 'failed', message: envData.error || 'Failed to update Vercel env' });
+        throw new Error(envData.error || 'Failed to update Vercel environment');
       }
 
-      const updatedFiles = envData.results.filter((r: any) => r.status !== 'skipped').map((r: any) => r.file).join(', ');
       updatePublishStep('update-b2c-env', {
         status: 'completed',
-        message: `Updated: ${updatedFiles || 'environment files'}`,
-        details: `NEXT_PUBLIC_DATA_VERSION=${newVersion}`
+        message: `NEXT_PUBLIC_DATA_VERSION=${newVersion}`,
+        details: envData.deploymentUrl || 'Deployment triggered',
       });
 
-      // Step 3: Check CI/CD deployment
-      updatePublishStep('trigger-deploy', { status: 'in_progress', message: 'Checking for CI/CD workflows...' });
+      // Step 3: Vercel deployment already triggered — poll for status
+      updatePublishStep('trigger-deploy', { status: 'in_progress', message: 'Vercel building...' });
 
-      // Wait a moment for GitHub Actions to trigger
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
+      await new Promise(resolve => setTimeout(resolve, 5000));
       await checkDeploymentStatus();
 
-      if (deploymentStatus?.hasWorkflows) {
-        updatePublishStep('trigger-deploy', {
-          status: 'completed',
-          message: `CI/CD triggered - ${deploymentStatus.status || 'Running'}`,
-          details: deploymentStatus.url
-        });
-      } else {
-        updatePublishStep('trigger-deploy', {
-          status: 'completed',
-          message: 'No CI/CD configured - Manual deployment may be needed',
-        });
-      }
+      updatePublishStep('trigger-deploy', {
+        status: 'completed',
+        message: `Vercel — ${deploymentStatus?.status?.toLowerCase() || 'building'}`,
+        details: 'https://kbmasale.com',
+      });
 
+      setPublishedVersion(newVersion);
       showMessage('success', `Version ${newVersion} published and deployed to B2C!`);
       fetchLatestRelease();
 
@@ -625,7 +832,7 @@ export default function AdminPanel() {
     setLoading(true);
     try {
       const categoryId = addFormData.id || generateId(addFormData.name);
-      const ext = addImageFile.name.split('.').pop();
+      const ext = addImageFile.name.split('.').pop() || 'png';
       const imagePath = `images/category/${categoryId}/${categoryId}.${ext}`;
 
       // Upload image
@@ -660,6 +867,8 @@ export default function AdminPanel() {
         setAddFormData({});
         setAddImageFile(null);
         setAddImagePreview(null);
+        setCompositeLabel(''); setCompositeBgColor('#FFF5E6'); setCompositeTextColor('#1a1a1a');
+        setCompositePreview(null); setCompositeFile(null); setRawPhotoPreview(null); setRawPhotoFile(null);
         showMessage('success', 'Category added successfully');
       } else {
         showMessage('error', data.error || 'Failed to add category');
@@ -720,6 +929,8 @@ export default function AdminPanel() {
         setAddFormData({});
         setAddImageFile(null);
         setAddImagePreview(null);
+        setCompositeLabel(''); setCompositeBgColor('#FFF5E6'); setCompositeTextColor('#1a1a1a');
+        setCompositePreview(null); setCompositeFile(null); setRawPhotoPreview(null); setRawPhotoFile(null);
         showMessage('success', 'Subcategory added successfully');
       } else {
         showMessage('error', data.error || 'Failed to add subcategory');
@@ -879,6 +1090,13 @@ export default function AdminPanel() {
     setImagePreview(null);
     setEditProductImages([]);
     setShowMoreDetails(false);
+    // Reset edit composite state
+    setEditCompositeLabel('');
+    setEditCompositeBgColor('#FFF5E6');
+    setEditCompositeTextColor('#1a1a1a');
+    setEditCompositePreview(null);
+    setEditRawPhotoPreview(null);
+    setEditRawPhotoFile(null);
   };
 
   // Delete category
@@ -1443,7 +1661,7 @@ export default function AdminPanel() {
           <div className="sticky top-0 bg-white border-b p-4 flex justify-between items-center">
             <h2 className="text-lg font-semibold">B2C Product Detail Preview</h2>
             <button
-              onClick={() => setEditingProductId(null)}
+              onClick={() => setEditFormData((prev: any) => prev ? { ...prev, _showPreview: false } : null)}
               className="p-2 hover:bg-gray-100 rounded-lg"
             >
               <X className="w-5 h-5" />
@@ -1579,6 +1797,14 @@ export default function AdminPanel() {
                   setAddImagePreview(null);
                   setProductImages([]);
                   setShowMoreDetails(false);
+                  // Reset composite state
+                  setCompositeLabel('');
+                  setCompositeBgColor('#FFF5E6');
+                  setCompositeTextColor('#1a1a1a');
+                  setCompositePreview(null);
+                  setCompositeFile(null);
+                  setRawPhotoPreview(null);
+                  setRawPhotoFile(null);
                 }}
                 className="p-2 hover:bg-gray-100 rounded-lg"
               >
@@ -1627,41 +1853,141 @@ export default function AdminPanel() {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Image *
-                    </label>
-                    {addImagePreview ? (
-                      <div className="space-y-2">
-                        <img
-                          src={addImagePreview}
-                          alt="Preview"
-                          className="w-full h-48 object-cover rounded-lg"
-                        />
+                  {/* Composite Image Builder (Blinkit-style) */}
+                  <div className="border-2 border-dashed border-purple-300 rounded-xl p-4 bg-purple-50/50">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Sparkles className="w-5 h-5 text-purple-600" />
+                      <h3 className="font-semibold text-purple-800">Image Card Builder</h3>
+                      <span className="text-xs text-purple-500 ml-auto">Photo + Label → Card Image</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Left: Inputs */}
+                      <div className="space-y-3">
+                        {/* Photo Upload */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            <Upload className="w-3 h-3 inline mr-1" /> Product Photo *
+                          </label>
+                          {rawPhotoPreview ? (
+                            <div className="relative">
+                              <img src={rawPhotoPreview} alt="Photo" className="w-full h-28 object-contain rounded-lg border bg-white" />
+                              <button
+                                onClick={() => { setRawPhotoFile(null); setRawPhotoPreview(null); setCompositePreview(null); setAddImageFile(null); setAddImagePreview(null); }}
+                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5"
+                              ><X className="w-3 h-3" /></button>
+                            </div>
+                          ) : (
+                            <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-white">
+                              <Upload className="w-8 h-8 text-gray-400 mb-1" />
+                              <p className="text-xs text-gray-500">Upload PNG/JPG</p>
+                              <p className="text-xs text-gray-400">(Max 5MB)</p>
+                              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => handleRawPhotoUpload(e, false)} className="hidden" />
+                            </label>
+                          )}
+                        </div>
+
+                        {/* Label */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            <Type className="w-3 h-3 inline mr-1" /> Label Text *
+                          </label>
+                          <input
+                            type="text"
+                            value={compositeLabel}
+                            onChange={(e) => setCompositeLabel(e.target.value)}
+                            placeholder="e.g. Atta, Rice & Dal"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-sm"
+                          />
+                        </div>
+
+                        {/* Background Color */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            <Palette className="w-3 h-3 inline mr-1" /> Background Color
+                          </label>
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {bgColorPresets.map((preset) => (
+                              <button
+                                key={preset.color}
+                                onClick={() => setCompositeBgColor(preset.color)}
+                                className={`w-7 h-7 rounded-full border-2 transition-all ${compositeBgColor === preset.color ? 'border-purple-600 scale-110 shadow-md' : 'border-gray-200 hover:border-gray-400'}`}
+                                style={{ backgroundColor: preset.color }}
+                                title={preset.name}
+                              />
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input type="color" value={compositeBgColor} onChange={(e) => setCompositeBgColor(e.target.value)} className="w-8 h-8 rounded cursor-pointer" />
+                            <input type="text" value={compositeBgColor} onChange={(e) => setCompositeBgColor(e.target.value)} className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs font-mono" />
+                          </div>
+                        </div>
+
+                        {/* Text Color */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Text Color</label>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => setCompositeTextColor('#1a1a1a')} className={`px-3 py-1 rounded text-xs font-medium ${compositeTextColor === '#1a1a1a' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>Dark</button>
+                            <button onClick={() => setCompositeTextColor('#ffffff')} className={`px-3 py-1 rounded text-xs font-medium ${compositeTextColor === '#ffffff' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>White</button>
+                            <input type="color" value={compositeTextColor} onChange={(e) => setCompositeTextColor(e.target.value)} className="w-6 h-6 rounded cursor-pointer" />
+                          </div>
+                        </div>
+
+                        {/* Generate Button */}
                         <button
-                          onClick={() => {
-                            setAddImageFile(null);
-                            setAddImagePreview(null);
-                          }}
-                          className="text-red-600 text-sm hover:underline"
+                          onClick={() => generateAndPreviewComposite(false)}
+                          disabled={!rawPhotoPreview || !compositeLabel.trim()}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-40 disabled:cursor-not-allowed font-medium text-sm"
                         >
-                          Remove Image
+                          <Sparkles className="w-4 h-4" />
+                          Generate Card Image
                         </button>
                       </div>
-                    ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                        <Upload className="w-12 h-12 text-gray-400 mb-2" />
-                        <p className="text-sm text-gray-500">Click to upload image</p>
-                        <p className="text-xs text-gray-400">JPG, PNG, WebP (Max 2MB)</p>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleAddImageUpload}
-                          className="hidden"
-                          required
-                        />
-                      </label>
-                    )}
+
+                      {/* Right: Preview */}
+                      <div className="flex flex-col items-center justify-center">
+                        <label className="block text-sm font-medium text-gray-500 mb-2 text-center">Generated Preview</label>
+                        {compositePreview ? (
+                          <div className="space-y-2 text-center">
+                            <img src={compositePreview} alt="Generated Card" className="w-48 h-48 object-contain rounded-2xl shadow-lg border" />
+                            <p className="text-xs text-green-600 font-medium flex items-center justify-center gap-1">
+                              <CheckCircle className="w-3 h-3" /> 400×400px PNG Ready
+                            </p>
+                            <button
+                              onClick={() => { setCompositePreview(null); setAddImageFile(null); setAddImagePreview(null); }}
+                              className="text-red-500 text-xs hover:underline"
+                            >
+                              Clear & Regenerate
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="w-48 h-48 border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center bg-white text-gray-400">
+                            <ImagePlus className="w-10 h-10 mb-2" />
+                            <p className="text-xs text-center px-4">Upload photo & enter label, then click Generate</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Or upload directly */}
+                    <div className="mt-4 pt-3 border-t border-purple-200">
+                      <details className="text-xs text-gray-500">
+                        <summary className="cursor-pointer hover:text-gray-700">Or upload a pre-made image directly</summary>
+                        <div className="mt-2">
+                          <label className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 text-sm">
+                            <Upload className="w-4 h-4" />
+                            Upload pre-made image (PNG, Max 2MB)
+                            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAddImageUpload} className="hidden" />
+                          </label>
+                          {addImagePreview && !compositePreview && (
+                            <div className="mt-2 flex items-center gap-2">
+                              <img src={addImagePreview} alt="Uploaded" className="w-16 h-16 object-contain rounded border" />
+                              <button onClick={() => { setAddImageFile(null); setAddImagePreview(null); }} className="text-red-500 text-xs hover:underline">Remove</button>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    </div>
                   </div>
                 </>
               )}
@@ -2008,7 +2334,7 @@ export default function AdminPanel() {
                       )}
                     </div>
                     <p className="text-sm mt-1">
-                      Status: <span className="font-medium capitalize">{deploymentStatus.status || 'Unknown'}</span>
+                      Status: <span className="font-medium capitalize">{deploymentStatus.hasWorkflows ? (deploymentStatus.status?.toLowerCase() || 'building') : 'Triggered'}</span>
                       {deploymentStatus.conclusion && (
                         <> • Conclusion: <span className="font-medium capitalize">{deploymentStatus.conclusion}</span></>
                       )}
@@ -2024,7 +2350,7 @@ export default function AdminPanel() {
                       <div>
                         <p className="font-semibold text-green-800">Publish Complete!</p>
                         <p className="text-sm text-green-700">
-                          Version {newVersion} has been published and deployed to the B2C app.
+                          Version {publishedVersion} has been published and deployed to the B2C app.
                         </p>
                       </div>
                     </div>
@@ -2360,32 +2686,8 @@ export default function AdminPanel() {
                 <div className="space-y-4 p-4 border-2 border-blue-300 rounded-lg bg-blue-50">
                   <p className="font-semibold text-blue-800">EDITING MODE</p>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      {imagePreview ? (
-                        <img
-                          src={imagePreview}
-                          alt="Preview"
-                          className="w-full h-40 object-cover rounded-lg"
-                        />
-                      ) : (
-                        <div className="w-full h-40 bg-gray-200 rounded-lg flex items-center justify-center">
-                          <Upload className="w-8 h-8 text-gray-400" />
-                        </div>
-                      )}
-                      <label className="mt-2 flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                        <Upload className="w-4 h-4" />
-                        Change Image
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleImageUpload}
-                          className="hidden"
-                        />
-                      </label>
-                    </div>
-
-                    <div className="space-y-3">
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                         <input
@@ -2404,14 +2706,74 @@ export default function AdminPanel() {
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">ID (read-only)</label>
+                      <input type="text" value={editFormData?.id || ''} disabled className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100" />
+                    </div>
+                  </div>
+
+                  {/* Current Image + Composite Regeneration */}
+                  <div className="border rounded-lg p-3 bg-white">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Current Image</p>
+                    <div className="flex items-start gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">ID (read-only)</label>
-                        <input
-                          type="text"
-                          value={editFormData?.id || ''}
-                          disabled
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"
-                        />
+                        {imagePreview ? (
+                          <img src={imagePreview} alt="Preview" className="w-32 h-32 object-contain rounded-xl border" />
+                        ) : (
+                          <div className="w-32 h-32 bg-gray-200 rounded-xl flex items-center justify-center">
+                            <Upload className="w-8 h-8 text-gray-400" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <label className="flex items-center gap-2 px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 text-sm">
+                          <Upload className="w-4 h-4" />
+                          Upload pre-made image
+                          <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                        </label>
+
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-purple-600 hover:text-purple-800 font-medium flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> Or regenerate composite card
+                          </summary>
+                          <div className="mt-2 space-y-2 p-2 bg-purple-50 rounded-lg">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Photo</label>
+                              {editRawPhotoPreview ? (
+                                <div className="relative inline-block">
+                                  <img src={editRawPhotoPreview} alt="Photo" className="w-20 h-20 object-contain rounded border bg-white" />
+                                  <button onClick={() => { setEditRawPhotoFile(null); setEditRawPhotoPreview(null); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5"><X className="w-2.5 h-2.5" /></button>
+                                </div>
+                              ) : (
+                                <label className="inline-flex items-center gap-1 px-2 py-1 bg-white border rounded cursor-pointer text-xs hover:bg-gray-50">
+                                  <Upload className="w-3 h-3" /> Upload photo
+                                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => handleRawPhotoUpload(e, true)} className="hidden" />
+                                </label>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Label</label>
+                              <input type="text" value={editCompositeLabel} onChange={(e) => setEditCompositeLabel(e.target.value)} placeholder="e.g. Atta, Rice & Dal" className="w-full px-2 py-1 border rounded text-xs" />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-gray-600">BG:</label>
+                              <div className="flex gap-1">
+                                {bgColorPresets.slice(0, 6).map((p) => (
+                                  <button key={p.color} onClick={() => setEditCompositeBgColor(p.color)} className={`w-5 h-5 rounded-full border ${editCompositeBgColor === p.color ? 'border-purple-600 scale-110' : 'border-gray-200'}`} style={{ backgroundColor: p.color }} />
+                                ))}
+                              </div>
+                              <input type="color" value={editCompositeBgColor} onChange={(e) => setEditCompositeBgColor(e.target.value)} className="w-5 h-5 rounded cursor-pointer" />
+                            </div>
+                            <button
+                              onClick={() => generateAndPreviewComposite(true)}
+                              disabled={!editRawPhotoPreview || !editCompositeLabel.trim()}
+                              className="w-full flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-40"
+                            >
+                              <Sparkles className="w-3 h-3" /> Generate
+                            </button>
+                          </div>
+                        </details>
                       </div>
                     </div>
                   </div>
@@ -2551,32 +2913,8 @@ export default function AdminPanel() {
                 <div className="space-y-4 p-4 border-2 border-blue-300 rounded-lg bg-blue-50">
                   <p className="font-semibold text-blue-800">EDITING MODE</p>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      {imagePreview ? (
-                        <img
-                          src={imagePreview}
-                          alt="Preview"
-                          className="w-full h-40 object-cover rounded-lg"
-                        />
-                      ) : (
-                        <div className="w-full h-40 bg-gray-200 rounded-lg flex items-center justify-center">
-                          <Upload className="w-8 h-8 text-gray-400" />
-                        </div>
-                      )}
-                      <label className="mt-2 flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                        <Upload className="w-4 h-4" />
-                        Change Image
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleImageUpload}
-                          className="hidden"
-                        />
-                      </label>
-                    </div>
-
-                    <div className="space-y-3">
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                         <input
@@ -2595,14 +2933,74 @@ export default function AdminPanel() {
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">ID (read-only)</label>
+                      <input type="text" value={editFormData?.id || ''} disabled className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100" />
+                    </div>
+                  </div>
+
+                  {/* Current Image + Composite Regeneration */}
+                  <div className="border rounded-lg p-3 bg-white">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Current Image</p>
+                    <div className="flex items-start gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">ID (read-only)</label>
-                        <input
-                          type="text"
-                          value={editFormData?.id || ''}
-                          disabled
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"
-                        />
+                        {imagePreview ? (
+                          <img src={imagePreview} alt="Preview" className="w-32 h-32 object-contain rounded-xl border" />
+                        ) : (
+                          <div className="w-32 h-32 bg-gray-200 rounded-xl flex items-center justify-center">
+                            <Upload className="w-8 h-8 text-gray-400" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <label className="flex items-center gap-2 px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 text-sm">
+                          <Upload className="w-4 h-4" />
+                          Upload pre-made image
+                          <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                        </label>
+
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-purple-600 hover:text-purple-800 font-medium flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> Or regenerate composite card
+                          </summary>
+                          <div className="mt-2 space-y-2 p-2 bg-purple-50 rounded-lg">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Photo</label>
+                              {editRawPhotoPreview ? (
+                                <div className="relative inline-block">
+                                  <img src={editRawPhotoPreview} alt="Photo" className="w-20 h-20 object-contain rounded border bg-white" />
+                                  <button onClick={() => { setEditRawPhotoFile(null); setEditRawPhotoPreview(null); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5"><X className="w-2.5 h-2.5" /></button>
+                                </div>
+                              ) : (
+                                <label className="inline-flex items-center gap-1 px-2 py-1 bg-white border rounded cursor-pointer text-xs hover:bg-gray-50">
+                                  <Upload className="w-3 h-3" /> Upload photo
+                                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => handleRawPhotoUpload(e, true)} className="hidden" />
+                                </label>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Label</label>
+                              <input type="text" value={editCompositeLabel} onChange={(e) => setEditCompositeLabel(e.target.value)} placeholder="e.g. Rice Bran" className="w-full px-2 py-1 border rounded text-xs" />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-gray-600">BG:</label>
+                              <div className="flex gap-1">
+                                {bgColorPresets.slice(0, 6).map((p) => (
+                                  <button key={p.color} onClick={() => setEditCompositeBgColor(p.color)} className={`w-5 h-5 rounded-full border ${editCompositeBgColor === p.color ? 'border-purple-600 scale-110' : 'border-gray-200'}`} style={{ backgroundColor: p.color }} />
+                                ))}
+                              </div>
+                              <input type="color" value={editCompositeBgColor} onChange={(e) => setEditCompositeBgColor(e.target.value)} className="w-5 h-5 rounded cursor-pointer" />
+                            </div>
+                            <button
+                              onClick={() => generateAndPreviewComposite(true)}
+                              disabled={!editRawPhotoPreview || !editCompositeLabel.trim()}
+                              className="w-full flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-40"
+                            >
+                              <Sparkles className="w-3 h-3" /> Generate
+                            </button>
+                          </div>
+                        </details>
                       </div>
                     </div>
                   </div>
