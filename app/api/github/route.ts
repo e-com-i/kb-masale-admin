@@ -245,7 +245,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Update NEXT_PUBLIC_DATA_VERSION in Vercel and trigger redeployment
+    // Update DATA_VERSION in Vercel and instant-redeploy (no rebuild needed)
     if (action === 'update-b2c-env') {
       const { tagName } = body;
 
@@ -253,7 +253,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Tag name is required' }, { status: 400 });
       }
 
-      // Step 1: Find existing NEXT_PUBLIC_DATA_VERSION env var
+      // Step 1: Find existing DATA_VERSION env var
       const listRes = await fetch(
         `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env`,
         { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
@@ -263,9 +263,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Failed to list Vercel env vars: ${listErr.error?.message || JSON.stringify(listErr)}` }, { status: 500 });
       }
       const listData = await listRes.json();
-      const existing = listData.envs?.find((e: any) => e.key === 'NEXT_PUBLIC_DATA_VERSION');
+      const existing = listData.envs?.find((e: any) => e.key === 'DATA_VERSION');
 
-      // Step 2: Create or update the env var
+      // Step 2: Create or update DATA_VERSION
       if (existing) {
         const patchRes = await fetch(
           `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env/${existing.id}`,
@@ -286,7 +286,7 @@ export async function POST(request: NextRequest) {
             method: 'POST',
             headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              key: 'NEXT_PUBLIC_DATA_VERSION',
+              key: 'DATA_VERSION',
               value: tagName,
               type: 'plain',
               target: ['production', 'preview'],
@@ -299,14 +299,28 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Step 3: Trigger a new Vercel deployment
+      // Step 3: Get current production deployment ID for instant redeploy (no recompile)
+      const latestProdRes = await fetch(
+        `https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&target=production&limit=1`,
+        { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
+      );
+      if (!latestProdRes.ok) {
+        const latestErr = await latestProdRes.json();
+        return NextResponse.json({ error: `Failed to get latest deployment: ${latestErr.error?.message || JSON.stringify(latestErr)}` }, { status: 500 });
+      }
+      const latestProdData = await latestProdRes.json();
+      const latestDeploymentId = latestProdData.deployments?.[0]?.uid;
+      if (!latestDeploymentId) {
+        return NextResponse.json({ error: 'No existing production deployment found to redeploy' }, { status: 500 });
+      }
+
+      // Step 4: Instant redeploy — same build, just new env vars (~5-10s, no recompile)
       const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
         method: 'POST',
         headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: 'kbmasale',
+          deploymentId: latestDeploymentId,
           target: 'production',
-          gitSource: { type: 'github', repoId: 1030670981, ref: B2C_BRANCH },
         }),
       });
       const deployData = await deployRes.json();
