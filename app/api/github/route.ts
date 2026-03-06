@@ -306,7 +306,6 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           name: 'kbmasale',
           gitSource: { type: 'github', repoId: 1030670981, ref: B2C_BRANCH },
-          projectId: VERCEL_PROJECT_ID,
         }),
       });
       const deployData = await deployRes.json();
