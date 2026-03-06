@@ -258,12 +258,16 @@ export async function POST(request: NextRequest) {
         `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env`,
         { headers: { Authorization: `Bearer ${VERCEL_TOKEN}` } }
       );
+      if (!listRes.ok) {
+        const listErr = await listRes.json();
+        return NextResponse.json({ error: `Failed to list Vercel env vars: ${listErr.error?.message || JSON.stringify(listErr)}` }, { status: 500 });
+      }
       const listData = await listRes.json();
       const existing = listData.envs?.find((e: any) => e.key === 'NEXT_PUBLIC_DATA_VERSION');
 
       // Step 2: Create or update the env var
       if (existing) {
-        await fetch(
+        const patchRes = await fetch(
           `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env/${existing.id}`,
           {
             method: 'PATCH',
@@ -271,8 +275,12 @@ export async function POST(request: NextRequest) {
             body: JSON.stringify({ value: tagName }),
           }
         );
+        if (!patchRes.ok) {
+          const patchErr = await patchRes.json();
+          return NextResponse.json({ error: `Failed to update Vercel env var: ${patchErr.error?.message || JSON.stringify(patchErr)}` }, { status: 500 });
+        }
       } else {
-        await fetch(
+        const createRes = await fetch(
           `https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env`,
           {
             method: 'POST',
@@ -285,6 +293,10 @@ export async function POST(request: NextRequest) {
             }),
           }
         );
+        if (!createRes.ok) {
+          const createErr = await createRes.json();
+          return NextResponse.json({ error: `Failed to create Vercel env var: ${createErr.error?.message || JSON.stringify(createErr)}` }, { status: 500 });
+        }
       }
 
       // Step 3: Trigger a new Vercel deployment
