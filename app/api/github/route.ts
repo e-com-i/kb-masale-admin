@@ -374,6 +374,27 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Fetch live site and check what version is showing
+    if (action === 'verify-live-version') {
+      const { expectedVersion } = body;
+      const res = await fetch('https://kbmarts.com', {
+        headers: { 'User-Agent': 'KB-Admin-Panel/1.0' },
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        return NextResponse.json({ error: `Failed to fetch live site: HTTP ${res.status}` }, { status: 500 });
+      }
+      const html = await res.text();
+      const match = html.match(/v(\d{4}-\d{2}-\d{2}_B\d+)/);
+      const liveVersion = match ? match[1] : null;
+      return NextResponse.json({
+        success: true,
+        liveVersion,
+        expectedVersion,
+        matches: liveVersion === expectedVersion,
+      });
+    }
+
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error: any) {
     console.error('GitHub API Error:', error);

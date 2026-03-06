@@ -558,6 +558,7 @@ export default function AdminPanel() {
       { id: 'create-release', label: 'Creating GitHub Release', status: 'pending' },
       { id: 'update-b2c-env', label: 'Updating B2C app environment files', status: 'pending' },
       { id: 'trigger-deploy', label: 'Checking CI/CD deployment', status: 'pending' },
+      { id: 'verify-version', label: 'Verifying live site version', status: 'pending' },
     ];
 
     setPublishSteps(steps);
@@ -639,8 +640,54 @@ export default function AdminPanel() {
         details: deployStatus.url || 'https://kbmasale.com',
       });
 
+      // Step 4: Poll live site until version matches (max 2 min)
+      updatePublishStep('verify-version', { status: 'in_progress', message: 'Waiting for deployment to go live...' });
+
+      const MAX_ATTEMPTS = 6;
+      const INTERVAL_MS = 20000;
+      let verified = false;
+      let liveVersion = null;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
+        updatePublishStep('verify-version', { status: 'in_progress', message: `Checking live site... (${attempt}/${MAX_ATTEMPTS})` });
+
+        const verifyResponse = await fetch('/api/github', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'verify-live-version', expectedVersion: newVersion }),
+        });
+
+        if (!verifyResponse.ok) {
+          const verifyErr = await verifyResponse.json();
+          updatePublishStep('verify-version', { status: 'failed', message: verifyErr.error || `HTTP ${verifyResponse.status}` });
+          throw new Error(verifyErr.error || 'Failed to verify live version');
+        }
+
+        const verifyData = await verifyResponse.json();
+        liveVersion = verifyData.liveVersion;
+
+        if (verifyData.matches) {
+          updatePublishStep('verify-version', {
+            status: 'completed',
+            message: `Live site shows v${liveVersion}`,
+            details: 'https://kbmarts.com',
+          });
+          verified = true;
+          break;
+        }
+      }
+
+      if (!verified) {
+        updatePublishStep('verify-version', {
+          status: 'failed',
+          message: `Deployment still in progress. Live: v${liveVersion || 'unknown'}, expected: v${newVersion}`,
+          details: 'https://kbmarts.com',
+        });
+      }
+
       setPublishedVersion(newVersion);
-      showMessage('success', `Version ${newVersion} published and deployed to B2C!`);
+      showMessage('success', `Version ${newVersion} published${verified ? ' and live!' : ' — deployment in progress'}`);
       fetchLatestRelease();
 
     } catch (error: any) {
