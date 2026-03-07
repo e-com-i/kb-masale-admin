@@ -315,10 +315,13 @@ export async function POST(request: NextRequest) {
       }
 
       // Step 4: Instant redeploy — same build, just new env vars (~5-10s, no recompile)
+      const latestDeployment = latestProdData.deployments?.[0];
+      const projectName = latestDeployment?.name || 'test-portal';
       const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
         method: 'POST',
         headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: projectName,
           deploymentId: latestDeploymentId,
           target: 'production',
         }),
@@ -393,19 +396,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Fetch live site and check what version is showing
+    // Fetch live site /api/config to check what DATA_VERSION is running
     if (action === 'verify-live-version') {
       const { expectedVersion } = body;
-      const res = await fetch('https://kbmarts.com', {
+      const res = await fetch('https://kbmarts.com/api/config', {
         headers: { 'User-Agent': 'KB-Admin-Panel/1.0' },
         cache: 'no-store',
       });
       if (!res.ok) {
-        return NextResponse.json({ error: `Failed to fetch live site: HTTP ${res.status}` }, { status: 500 });
+        return NextResponse.json({ error: `Failed to fetch live site config: HTTP ${res.status}` }, { status: 500 });
       }
-      const html = await res.text();
-      const match = html.match(/v(\d{4}-\d{2}-\d{2}_B\d+)/);
-      const liveVersion = match ? match[1] : null;
+      const config = await res.json();
+      const liveVersion = config.dataVersion || null;
       return NextResponse.json({
         success: true,
         liveVersion,

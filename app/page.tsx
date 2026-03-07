@@ -692,7 +692,8 @@ export default function AdminPanel() {
       }
 
       // Step 4: Poll live site until version matches (max 2 min)
-      updatePublishStep('verify-version', { status: 'in_progress', message: 'Waiting for deployment to go live...' });
+      const verifyUrl = 'https://kbmarts.com/api/config';
+      updatePublishStep('verify-version', { status: 'in_progress', message: `Waiting for v${newVersion} to appear at ${verifyUrl} ...` });
 
       const MAX_ATTEMPTS = 6;
       const INTERVAL_MS = 20000;
@@ -701,7 +702,7 @@ export default function AdminPanel() {
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
-        updatePublishStep('verify-version', { status: 'in_progress', message: `Checking live site... (${attempt}/${MAX_ATTEMPTS})` });
+        updatePublishStep('verify-version', { status: 'in_progress', message: `Polling ${verifyUrl} for v${newVersion} ... (attempt ${attempt}/${MAX_ATTEMPTS})` });
 
         const verifyResponse = await fetch('/api/github', {
           method: 'POST',
@@ -721,19 +722,24 @@ export default function AdminPanel() {
         if (verifyData.matches) {
           updatePublishStep('verify-version', {
             status: 'completed',
-            message: `Live site shows v${liveVersion}`,
-            details: 'https://kbmarts.com',
+            message: `Confirmed! kbmarts.com is now serving v${liveVersion}`,
+            details: verifyUrl,
           });
           verified = true;
           break;
+        } else {
+          updatePublishStep('verify-version', {
+            status: 'in_progress',
+            message: `${verifyUrl} returned v${liveVersion || 'unknown'}, waiting for v${newVersion} ... (attempt ${attempt}/${MAX_ATTEMPTS})`,
+          });
         }
       }
 
       if (!verified) {
         updatePublishStep('verify-version', {
           status: 'failed',
-          message: `Deployment still in progress. Live: v${liveVersion || 'unknown'}, expected: v${newVersion}`,
-          details: 'https://kbmarts.com',
+          message: `Timed out. ${verifyUrl} still shows v${liveVersion || 'unknown'}, expected v${newVersion}`,
+          details: verifyUrl,
         });
       }
 
