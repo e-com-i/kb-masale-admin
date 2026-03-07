@@ -674,10 +674,6 @@ export default function AdminPanel() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        showMessage('error', 'Image size should be less than 2MB');
-        return;
-      }
       setNewImageFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -691,10 +687,6 @@ export default function AdminPanel() {
   const handleAddImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        showMessage('error', 'Image size should be less than 2MB');
-        return;
-      }
       setAddImageFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -710,10 +702,6 @@ export default function AdminPanel() {
     if (files) {
       const newImages: { file: File; preview: string }[] = [];
       Array.from(files).forEach(file => {
-        if (file.size > 2 * 1024 * 1024) {
-          showMessage('error', `Image ${file.name} is larger than 2MB`);
-          return;
-        }
         const reader = new FileReader();
         reader.onloadend = () => {
           newImages.push({ file, preview: reader.result as string });
@@ -731,10 +719,6 @@ export default function AdminPanel() {
     const files = e.target.files;
     if (files) {
       Array.from(files).forEach(file => {
-        if (file.size > 2 * 1024 * 1024) {
-          showMessage('error', `Image ${file.name} is larger than 2MB`);
-          return;
-        }
         const reader = new FileReader();
         reader.onloadend = () => {
           setEditProductImages(prev => [...prev, { file, preview: reader.result as string, isExisting: false }]);
@@ -2691,35 +2675,13 @@ export default function AdminPanel() {
   // Render Dashboard
   const renderDashboard = () => (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-lg shadow-md">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-sm">Categories</p>
-              <p className="text-3xl font-bold text-gray-900">{categories.length}</p>
-            </div>
-            <Package className="w-12 h-12 text-blue-500" />
+      <div className="bg-white p-6 rounded-lg shadow-md max-w-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-gray-500 text-sm">Categories</p>
+            <p className="text-3xl font-bold text-gray-900">{categories.length}</p>
           </div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow-md">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-sm">Sub Categories</p>
-              <p className="text-3xl font-bold text-gray-900">{subcategories.length > 0 ? subcategories.length : '-'}</p>
-              <p className="text-xs text-gray-400 mt-1">Click a category to see count</p>
-            </div>
-            <FolderTree className="w-12 h-12 text-green-500" />
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow-md">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-sm">Products</p>
-              <p className="text-3xl font-bold text-gray-900">{products.length > 0 ? products.length : '-'}</p>
-              <p className="text-xs text-gray-400 mt-1">Click a subcategory to see count</p>
-            </div>
-            <ShoppingCart className="w-12 h-12 text-purple-500" />
-          </div>
+          <Package className="w-12 h-12 text-blue-500" />
         </div>
       </div>
 
@@ -3507,26 +3469,22 @@ export default function AdminPanel() {
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center">
-            <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setViewMode('dashboard');
+                setSelectedCategory(null);
+                setSelectedSubCategory(null);
+                setEditingCategoryId(null);
+                setEditingSubCategoryId(null);
+                setEditingProductId(null);
+                setPreviewMode(false);
+              }}
+              className="flex items-center gap-3 hover:opacity-80 transition"
+            >
               <ShoppingCart className="w-8 h-8 text-blue-600" />
               <h1 className="text-2xl font-bold text-gray-900">KB Masale Admin</h1>
-            </div>
+            </button>
             <div className="flex items-center gap-4">
-              <button
-                onClick={() => {
-                  setViewMode('dashboard');
-                  setSelectedCategory(null);
-                  setSelectedSubCategory(null);
-                  setEditingCategoryId(null);
-                  setEditingSubCategoryId(null);
-                  setEditingProductId(null);
-                  setPreviewMode(false);
-                }}
-                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition"
-              >
-                Dashboard
-              </button>
-
               {/* User Menu */}
               <div className="relative">
                 <button

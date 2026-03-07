@@ -1,25 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Octokit } from '@octokit/rest';
 
-// IMPORTANT: Add your GitHub Personal Access Token here or use environment variable
 const GITHUB_TOKEN = process.env.KB_GITHUB_TOKEN || 'YOUR_GITHUB_TOKEN_HERE';
-const B2C_GITHUB_TOKEN = process.env.KB_B2C_GITHUB_TOKEN || 'YOUR_B2C_GITHUB_TOKEN_HERE';
 const GITHUB_OWNER = 'iFrugal';
 const GITHUB_REPO = 'json-data-keeper';
 const GITHUB_BRANCH = 'main';
 const BASE_PATH = process.env.KB_DATA_PATH || 'kb-v3';
 
-// B2C App Repository
-const B2C_OWNER = 'e-com-i';
-const B2C_REPO = 'test-portal';
-const B2C_BRANCH = 'main';
-
-// Vercel
+// Vercel (for publish/deploy B2C from admin)
 const VERCEL_TOKEN = process.env.KB_VERCEL_TOKEN || '';
 const VERCEL_PROJECT_ID = process.env.KB_VERCEL_PROJECT_ID || '';
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
-const b2cOctokit = new Octokit({ auth: B2C_GITHUB_TOKEN });
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
