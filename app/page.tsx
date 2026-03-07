@@ -670,61 +670,101 @@ export default function AdminPanel() {
     setTimeout(() => setMessage(null), 5000);
   };
 
-  // Image upload handler (for inline editing)
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setNewImageFile(file);
+  // Compress image to stay within Vercel's 4.5MB request body limit
+  // Base64 adds ~33% overhead, so compressed file must be under ~3MB
+  const compressImage = (file: File): Promise<{ file: File; preview: string }> => {
+    return new Promise((resolve) => {
+      // Small files (<500KB) can skip compression
+      if (file.size <= 500 * 1024) {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve({ file, preview: reader.result as string });
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      const img = new Image();
       const reader = new FileReader();
       reader.onloadend = () => {
-        setImagePreview(reader.result as string);
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let { width, height } = img;
+
+          // Scale down based on file size
+          const maxWidth = file.size > 3 * 1024 * 1024 ? 800 : 1200;
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d')!;
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Lower quality for very large files
+          const quality = file.size > 5 * 1024 * 1024 ? 0.6 : 0.75;
+
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                const compressedFile = new File([blob], file.name.replace(/\.\w+$/, '.webp'), {
+                  type: 'image/webp',
+                });
+                const previewReader = new FileReader();
+                previewReader.onloadend = () => resolve({ file: compressedFile, preview: previewReader.result as string });
+                previewReader.readAsDataURL(compressedFile);
+              } else {
+                resolve({ file, preview: reader.result as string });
+              }
+            },
+            'image/webp',
+            quality
+          );
+        };
+        img.src = reader.result as string;
       };
       reader.readAsDataURL(file);
+    });
+  };
+
+  // Image upload handler (for inline editing)
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const { file: compressed, preview } = await compressImage(file);
+      setNewImageFile(compressed);
+      setImagePreview(preview);
     }
   };
 
   // Image upload handler (for add forms)
-  const handleAddImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAddImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setAddImageFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setAddImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      const { file: compressed, preview } = await compressImage(file);
+      setAddImageFile(compressed);
+      setAddImagePreview(preview);
     }
   };
 
   // Multiple product images upload handler
-  const handleProductImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleProductImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
-      const newImages: { file: File; preview: string }[] = [];
-      Array.from(files).forEach(file => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          newImages.push({ file, preview: reader.result as string });
-          if (newImages.length === files.length) {
-            setProductImages(prev => [...prev, ...newImages]);
-          }
-        };
-        reader.readAsDataURL(file);
-      });
+      const compressed = await Promise.all(Array.from(files).map(f => compressImage(f)));
+      setProductImages(prev => [...prev, ...compressed]);
     }
   };
 
   // Edit product images upload handler
-  const handleEditProductImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleEditProductImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
-      Array.from(files).forEach(file => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setEditProductImages(prev => [...prev, { file, preview: reader.result as string, isExisting: false }]);
-        };
-        reader.readAsDataURL(file);
-      });
+      const compressed = await Promise.all(Array.from(files).map(f => compressImage(f)));
+      setEditProductImages(prev => [
+        ...prev,
+        ...compressed.map(({ file: f, preview }) => ({ file: f, preview, isExisting: false })),
+      ]);
     }
   };
 
