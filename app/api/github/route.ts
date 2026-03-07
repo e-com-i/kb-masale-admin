@@ -7,7 +7,7 @@ const B2C_GITHUB_TOKEN = process.env.KB_B2C_GITHUB_TOKEN || 'YOUR_B2C_GITHUB_TOK
 const GITHUB_OWNER = 'iFrugal';
 const GITHUB_REPO = 'json-data-keeper';
 const GITHUB_BRANCH = 'main';
-const BASE_PATH = 'kb-v2';
+const BASE_PATH = process.env.KB_DATA_PATH || 'kb-v3';
 
 // B2C App Repository
 const B2C_OWNER = 'e-com-i';
@@ -28,19 +28,27 @@ export async function GET(request: NextRequest) {
 
   try {
     if (action === 'get-file' && path) {
-      const { data } = await octokit.repos.getContent({
-        owner: GITHUB_OWNER,
-        repo: GITHUB_REPO,
-        path: `${BASE_PATH}/${path}`,
-        ref: GITHUB_BRANCH,
-      });
+      try {
+        const { data } = await octokit.repos.getContent({
+          owner: GITHUB_OWNER,
+          repo: GITHUB_REPO,
+          path: `${BASE_PATH}/${path}`,
+          ref: GITHUB_BRANCH,
+        });
 
-      if ('content' in data) {
-        const content = Buffer.from(data.content, 'base64').toString('utf-8');
-        return NextResponse.json({ content: JSON.parse(content), sha: data.sha });
+        if ('content' in data) {
+          const content = Buffer.from(data.content, 'base64').toString('utf-8');
+          return NextResponse.json({ content: JSON.parse(content), sha: data.sha });
+        }
+
+        return NextResponse.json({ content: null, error: 'Not a file' }, { status: 200 });
+      } catch (fileError: any) {
+        // File/path doesn't exist yet (e.g. new data path) — return empty, don't crash
+        if (fileError.status === 404) {
+          return NextResponse.json({ content: null, notFound: true });
+        }
+        throw fileError;
       }
-
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
     if (action === 'list-files') {

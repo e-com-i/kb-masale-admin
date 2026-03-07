@@ -311,7 +311,7 @@ View current state
 ### 4. Test GitHub API Directly
 ```bash
 curl -H "Authorization: token YOUR_TOKEN" \
-  https://api.github.com/repos/iFrugal/json-data-keeper/contents/kb-v2/master/category/all.json
+  https://api.github.com/repos/iFrugal/json-data-keeper/contents/kb-v3/master/category/all.json
 ```
 
 ---

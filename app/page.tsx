@@ -33,17 +33,25 @@ import {
   ExternalLink,
   Clock,
   RefreshCw,
-  Palette,
-  Type,
-  Sparkles
+  ChevronUp,
+  ChevronDown,
+  Settings,
 } from 'lucide-react';
 
 // Types
+interface UnitOption {
+  id: string;
+  label: string;
+  order: number;
+  types: string[];
+}
+
 interface Category {
   id: string;
   name: string;
   order: number;
   image: string;
+  updatedBy?: string;
 }
 
 interface SubCategory {
@@ -51,6 +59,7 @@ interface SubCategory {
   name: string;
   order: number;
   image: string;
+  updatedBy?: string;
 }
 
 interface MoreDetails {
@@ -77,6 +86,7 @@ interface Product {
   publish: boolean;
   createdAt?: string;
   updatedAt?: string;
+  updatedBy?: string;
 }
 
 interface CategoriesData {
@@ -104,8 +114,24 @@ interface ProductsData {
   products: Product[];
 }
 
-type ViewMode = 'dashboard' | 'categories' | 'subcategories' | 'products';
+type ViewMode = 'dashboard' | 'categories' | 'subcategories' | 'products' | 'units';
 type FormMode = 'add-category' | 'add-subcategory' | 'add-product' | null;
+
+// Helper: get fresh image URL — bypass CDN/browser cache for admin
+// Converts jsdelivr CDN URLs to raw.githubusercontent (no CDN cache)
+// and adds a cache-buster timestamp
+const getFreshImageUrl = (url: string): string => {
+  if (!url) return url;
+  // Strip any existing query params
+  const cleanUrl = url.split('?')[0];
+  // Convert jsdelivr CDN to raw.githubusercontent (no cache layer)
+  const freshUrl = cleanUrl.replace(
+    /https:\/\/cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^@]+)@([^/]+)\/(.*)/,
+    'https://raw.githubusercontent.com/$1/$2/$3/$4'
+  );
+  // Add cache-buster
+  return `${freshUrl}?t=${Date.now()}`;
+};
 
 // Helper function to display price in Rupees
 const DisplayPriceInRupees = (price: number): string => {
@@ -133,6 +159,10 @@ export default function AdminPanel() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [subcategories, setSubcategories] = useState<SubCategory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [unitOptions, setUnitOptions] = useState<UnitOption[]>([]);
+  const [unitTypes, setUnitTypes] = useState<string[]>([]);
+  const [selectedUnitType, setSelectedUnitType] = useState<string>('');  // for product form filter
+  const [editSelectedUnitType, setEditSelectedUnitType] = useState<string>('');  // for edit form filter
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [selectedSubCategory, setSelectedSubCategory] = useState<SubCategory | null>(null);
   const [loading, setLoading] = useState(false);
@@ -167,6 +197,12 @@ export default function AdminPanel() {
   const [latestRelease, setLatestRelease] = useState<{ tag: string; name?: string; publishedAt?: string } | null>(null);
   const [newVersion, setNewVersion] = useState('');
   const [publishedVersion, setPublishedVersion] = useState('');
+
+  // Unit Management Screen State
+  const [newUnitLabel, setNewUnitLabel] = useState('');
+  const [newUnitTypes, setNewUnitTypes] = useState<string[]>([]);
+  const [newTypeName, setNewTypeName] = useState('');
+  const [unitFilterType, setUnitFilterType] = useState<string>('');
   const [releaseNotes, setReleaseNotes] = useState('');
 
   // Publish Steps State for live updates
@@ -189,220 +225,15 @@ export default function AdminPanel() {
   // More Details expanded state
   const [showMoreDetails, setShowMoreDetails] = useState(false);
 
-  // Composite Image Generation State (Blinkit-style)
-  const [compositeLabel, setCompositeLabel] = useState('');
-  const [compositeBgColor, setCompositeBgColor] = useState('#FFF5E6');
-  const [compositeTextColor, setCompositeTextColor] = useState('#1a1a1a');
-  const [compositePreview, setCompositePreview] = useState<string | null>(null);
-  const [compositeFile, setCompositeFile] = useState<File | null>(null);
-  const [rawPhotoPreview, setRawPhotoPreview] = useState<string | null>(null);
-  const [rawPhotoFile, setRawPhotoFile] = useState<File | null>(null);
-  // Edit mode composite state
-  const [editCompositeLabel, setEditCompositeLabel] = useState('');
-  const [editCompositeBgColor, setEditCompositeBgColor] = useState('#FFF5E6');
-  const [editCompositeTextColor, setEditCompositeTextColor] = useState('#1a1a1a');
-  const [editCompositePreview, setEditCompositePreview] = useState<string | null>(null);
-  const [editRawPhotoPreview, setEditRawPhotoPreview] = useState<string | null>(null);
-  const [editRawPhotoFile, setEditRawPhotoFile] = useState<File | null>(null);
 
-  // Preset background colors for category cards
-  const bgColorPresets = [
-    { color: '#FFF5E6', name: 'Warm Cream' },
-    { color: '#E8F5E9', name: 'Mint Green' },
-    { color: '#FFF3E0', name: 'Light Orange' },
-    { color: '#F3E5F5', name: 'Soft Purple' },
-    { color: '#E3F2FD', name: 'Light Blue' },
-    { color: '#FBE9E7', name: 'Soft Red' },
-    { color: '#FFFDE7', name: 'Light Yellow' },
-    { color: '#F1F8E9', name: 'Lime Green' },
-    { color: '#FCE4EC', name: 'Soft Pink' },
-    { color: '#E0F2F1', name: 'Teal' },
-  ];
+  // Use raw.githubusercontent for admin (no CDN cache) — jsdelivr caches aggressively
+  // Data path from env var — single source of truth, never hardcode kb-v2/kb-v3
+  const DATA_PATH = process.env.NEXT_PUBLIC_KB_DATA_PATH || 'kb-v3';
+  const BASE_IMAGE_URL = `https://raw.githubusercontent.com/iFrugal/json-data-keeper/main/${DATA_PATH}`;
 
-  const BASE_IMAGE_URL = 'https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@main/kb-v2';
+  // NOTE: Composite image generation removed — now using separate text approach
+  // (text rendered via CSS in B2C app, admin just uploads product photo)
 
-  // Generate composite image with Canvas (Blinkit-style: photo + label baked in)
-  const generateCompositeImage = async (
-    photoDataUrl: string,
-    label: string,
-    bgColor: string,
-    textColor: string
-  ): Promise<{ dataUrl: string; file: File }> => {
-    return new Promise((resolve, reject) => {
-      const canvas = document.createElement('canvas');
-      // 400x400 for high-res, works well for grid-cols-3 to grid-cols-10
-      const SIZE = 400;
-      canvas.width = SIZE;
-      canvas.height = SIZE;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { reject(new Error('Canvas not supported')); return; }
-
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        // 1. Fill card background white, clip to rounded rect
-        ctx.fillStyle = '#FFFFFF';
-        ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(0, 0, SIZE, SIZE, 24);
-        } else {
-          // Polyfill for older browsers
-          const r = 24;
-          ctx.moveTo(r, 0);
-          ctx.lineTo(SIZE - r, 0);
-          ctx.quadraticCurveTo(SIZE, 0, SIZE, r);
-          ctx.lineTo(SIZE, SIZE - r);
-          ctx.quadraticCurveTo(SIZE, SIZE, SIZE - r, SIZE);
-          ctx.lineTo(r, SIZE);
-          ctx.quadraticCurveTo(0, SIZE, 0, SIZE - r);
-          ctx.lineTo(0, r);
-          ctx.quadraticCurveTo(0, 0, r, 0);
-          ctx.closePath();
-        }
-        ctx.fill();
-        ctx.clip();
-
-        // 2. Draw photo container box (bgColor) with padding inside the card
-        const containerMargin = SIZE * 0.04;
-        const photoAreaHeight = SIZE * 0.65;
-        ctx.fillStyle = bgColor;
-        ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(containerMargin, containerMargin, SIZE - containerMargin * 2, photoAreaHeight - containerMargin, 16);
-        } else {
-          ctx.rect(containerMargin, containerMargin, SIZE - containerMargin * 2, photoAreaHeight - containerMargin);
-        }
-        ctx.fill();
-
-        // 3. Draw the product photo inside the container
-        const photoTopPadding = SIZE * 0.06;
-        const photoSidePadding = SIZE * 0.10;
-        const availableWidth = SIZE - photoSidePadding * 2;
-        const availableHeight = photoAreaHeight - containerMargin - photoTopPadding;
-
-        // Maintain aspect ratio
-        const scale = Math.min(availableWidth / img.width, availableHeight / img.height);
-        const drawWidth = img.width * scale;
-        const drawHeight = img.height * scale;
-        const drawX = (SIZE - drawWidth) / 2;
-        const drawY = containerMargin + photoTopPadding + (availableHeight - drawHeight) / 2;
-
-        ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
-
-        // 4. Draw label text on the white area below the photo container
-        const textAreaY = photoAreaHeight + SIZE * 0.01;
-        const textAreaHeight = SIZE - textAreaY;
-        const maxTextWidth = SIZE - 32;
-
-        // Auto-size font: start at 36px, shrink to fit
-        let fontSize = 36;
-        ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-
-        // Word wrap and font sizing
-        const wrapText = (text: string, maxWidth: number, fSize: number): string[] => {
-          ctx.font = `bold ${fSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-          const words = text.split(' ');
-          const lines: string[] = [];
-          let currentLine = words[0] || '';
-          for (let i = 1; i < words.length; i++) {
-            const testLine = currentLine + ' ' + words[i];
-            if (ctx.measureText(testLine).width > maxWidth) {
-              lines.push(currentLine);
-              currentLine = words[i];
-            } else {
-              currentLine = testLine;
-            }
-          }
-          lines.push(currentLine);
-          return lines;
-        };
-
-        // Find best font size (max 2 lines)
-        let lines: string[] = [];
-        while (fontSize > 18) {
-          lines = wrapText(label, maxTextWidth, fontSize);
-          const lineHeight = fontSize * 1.2;
-          if (lines.length <= 2 && lines.length * lineHeight <= textAreaHeight - 16) break;
-          fontSize -= 2;
-        }
-
-        // Draw text centered in bottom area
-        ctx.fillStyle = textColor;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const lineHeight = fontSize * 1.25;
-        const totalTextHeight = lines.length * lineHeight;
-        const textStartY = textAreaY + (textAreaHeight - totalTextHeight) / 2 + lineHeight / 2;
-
-        lines.forEach((line, i) => {
-          ctx.fillText(line, SIZE / 2, textStartY + i * lineHeight);
-        });
-
-        // Convert to PNG
-        canvas.toBlob((blob) => {
-          if (!blob) { reject(new Error('Failed to generate image')); return; }
-          const dataUrl = canvas.toDataURL('image/png');
-          const file = new File([blob], 'composite.png', { type: 'image/png' });
-          resolve({ dataUrl, file });
-        }, 'image/png');
-      };
-      img.onerror = () => reject(new Error('Failed to load photo'));
-      img.src = photoDataUrl;
-    });
-  };
-
-  // Handle raw photo upload for composite generation
-  const handleRawPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>, isEdit = false) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        showMessage('error', 'Photo size should be less than 5MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result as string;
-        if (isEdit) {
-          setEditRawPhotoFile(file);
-          setEditRawPhotoPreview(dataUrl);
-        } else {
-          setRawPhotoFile(file);
-          setRawPhotoPreview(dataUrl);
-        }
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  // Generate and preview composite image
-  const generateAndPreviewComposite = async (isEdit = false) => {
-    const photoPreview = isEdit ? editRawPhotoPreview : rawPhotoPreview;
-    const label = isEdit ? editCompositeLabel : compositeLabel;
-    const bgColor = isEdit ? editCompositeBgColor : compositeBgColor;
-    const textColor = isEdit ? editCompositeTextColor : compositeTextColor;
-
-    if (!photoPreview || !label.trim()) {
-      showMessage('error', 'Please upload a photo and enter a label');
-      return;
-    }
-
-    try {
-      const { dataUrl, file } = await generateCompositeImage(photoPreview, label.trim(), bgColor, textColor);
-      if (isEdit) {
-        setEditCompositePreview(dataUrl);
-        setNewImageFile(file);
-        setImagePreview(dataUrl);
-      } else {
-        setCompositePreview(dataUrl);
-        setCompositeFile(file);
-        setAddImageFile(file);
-        setAddImagePreview(dataUrl);
-      }
-      showMessage('success', 'Composite image generated!');
-    } catch (error) {
-      showMessage('error', 'Failed to generate composite image');
-    }
-  };
 
   // Default more_details template
   const defaultMoreDetails: MoreDetails = {
@@ -422,10 +253,15 @@ export default function AdminPanel() {
       const response = await fetch('/api/github?action=get-file&path=master/category/all.json');
       const data = await response.json();
       if (data.content) {
-        setCategories(data.content.categories || []);
+        setCategories((data.content.categories || []).sort((a: Category, b: Category) => (a.order ?? 999) - (b.order ?? 999)));
+      } else {
+        // No data yet (404 / empty repo) — start with empty state
+        setCategories([]);
       }
     } catch (error) {
-      showMessage('error', 'Failed to fetch categories');
+      // Network error or data path doesn't exist yet — show empty, don't crash
+      console.warn('Categories not found — starting with empty state:', error);
+      setCategories([]);
     } finally {
       setLoading(false);
     }
@@ -438,10 +274,12 @@ export default function AdminPanel() {
       const response = await fetch(`/api/github?action=get-file&path=master/category/${categoryId}/sub-categories.json`);
       const data = await response.json();
       if (data.content) {
-        setSubcategories(data.content.subcategories || []);
+        setSubcategories((data.content.subcategories || []).sort((a: SubCategory, b: SubCategory) => (a.order ?? 999) - (b.order ?? 999)));
+      } else {
+        setSubcategories([]);
       }
     } catch (error) {
-      showMessage('error', 'Failed to fetch subcategories');
+      console.warn('SubCategories not found — starting with empty state:', error);
       setSubcategories([]);
     } finally {
       setLoading(false);
@@ -456,12 +294,33 @@ export default function AdminPanel() {
       const data = await response.json();
       if (data.content) {
         setProducts(data.content.products || []);
+      } else {
+        setProducts([]);
       }
     } catch (error) {
-      showMessage('error', 'Failed to fetch products');
+      console.warn('Products not found — starting with empty state:', error);
       setProducts([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch unit dropdown options from GitHub
+  const fetchUnitOptions = async () => {
+    try {
+      const response = await fetch('/api/github?action=get-file&path=master/dropdown-values/product/unit/all.json');
+      const data = await response.json();
+      if (data.content) {
+        setUnitOptions((data.content.units || []).sort((a: UnitOption, b: UnitOption) => (a.order ?? 999) - (b.order ?? 999)));
+        setUnitTypes(data.content.types || []);
+      } else {
+        setUnitOptions([]);
+        setUnitTypes([]);
+      }
+    } catch (error) {
+      console.warn('Unit options not found — starting with empty state:', error);
+      setUnitOptions([]);
+      setUnitTypes([]);
     }
   };
 
@@ -771,6 +630,7 @@ export default function AdminPanel() {
   useEffect(() => {
     if (status === 'authenticated') {
       fetchCategories();
+      fetchUnitOptions();
       fetchLatestRelease();
     }
   }, [status]);
@@ -914,7 +774,8 @@ export default function AdminPanel() {
           });
           const data = await response.json();
           if (data.success) {
-            resolve(`${BASE_IMAGE_URL}/${path}`);
+            // Add cache-buster to avoid stale images after re-upload
+            resolve(`${BASE_IMAGE_URL}/${path}?t=${Date.now()}`);
           } else {
             reject(new Error(data.error));
           }
@@ -952,7 +813,8 @@ export default function AdminPanel() {
         id: categoryId,
         name: addFormData.name,
         order: addFormData.order || categories.length + 1,
-        image: imageUrl
+        image: imageUrl,
+        updatedBy: session?.user?.email || 'unknown',
       };
 
       const updatedCategories = [...categories, newCategory];
@@ -976,8 +838,6 @@ export default function AdminPanel() {
         setAddFormData({});
         setAddImageFile(null);
         setAddImagePreview(null);
-        setCompositeLabel(''); setCompositeBgColor('#FFF5E6'); setCompositeTextColor('#1a1a1a');
-        setCompositePreview(null); setCompositeFile(null); setRawPhotoPreview(null); setRawPhotoFile(null);
         showMessage('success', 'Category added successfully');
       } else {
         showMessage('error', data.error || 'Failed to add category');
@@ -1010,7 +870,8 @@ export default function AdminPanel() {
         id: subcategoryId,
         name: addFormData.name,
         order: addFormData.order || subcategories.length + 1,
-        image: imageUrl
+        image: imageUrl,
+        updatedBy: session?.user?.email || 'unknown',
       };
 
       const updatedSubCategories = [...subcategories, newSubCategory];
@@ -1038,8 +899,6 @@ export default function AdminPanel() {
         setAddFormData({});
         setAddImageFile(null);
         setAddImagePreview(null);
-        setCompositeLabel(''); setCompositeBgColor('#FFF5E6'); setCompositeTextColor('#1a1a1a');
-        setCompositePreview(null); setCompositeFile(null); setRawPhotoPreview(null); setRawPhotoFile(null);
         showMessage('success', 'Subcategory added successfully');
       } else {
         showMessage('error', data.error || 'Failed to add subcategory');
@@ -1087,7 +946,8 @@ export default function AdminPanel() {
         more_details: addFormData.more_details || defaultMoreDetails,
         publish: addFormData.publish !== false,
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        updatedBy: session?.user?.email || 'unknown',
       };
 
       const updatedProducts = [...products, newProduct];
@@ -1153,7 +1013,7 @@ export default function AdminPanel() {
       }
 
       const updatedCategories = categories.map(cat =>
-        cat.id === editFormData.id ? { ...editFormData, image: imageUrl } : cat
+        cat.id === editFormData.id ? { ...editFormData, image: imageUrl, updatedBy: session?.user?.email || 'unknown' } : cat
       );
 
       const getResponse = await fetch(`/api/github?action=get-file&path=master/category/all.json`);
@@ -1199,13 +1059,6 @@ export default function AdminPanel() {
     setImagePreview(null);
     setEditProductImages([]);
     setShowMoreDetails(false);
-    // Reset edit composite state
-    setEditCompositeLabel('');
-    setEditCompositeBgColor('#FFF5E6');
-    setEditCompositeTextColor('#1a1a1a');
-    setEditCompositePreview(null);
-    setEditRawPhotoPreview(null);
-    setEditRawPhotoFile(null);
   };
 
   // Delete category
@@ -1267,7 +1120,7 @@ export default function AdminPanel() {
       }
 
       const updatedSubCategories = subcategories.map(sub =>
-        sub.id === editFormData.id ? { ...editFormData, image: imageUrl } : sub
+        sub.id === editFormData.id ? { ...editFormData, image: imageUrl, updatedBy: session?.user?.email || 'unknown' } : sub
       );
 
       const getResponse = await fetch(`/api/github?action=get-file&path=master/category/${selectedCategory.id}/sub-categories.json`);
@@ -1379,7 +1232,8 @@ export default function AdminPanel() {
       const updatedProduct = {
         ...editFormData,
         image: finalImageUrls.length > 0 ? finalImageUrls : editFormData.image,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        updatedBy: session?.user?.email || 'unknown',
       };
 
       const updatedProducts = products.map(prod =>
@@ -1475,6 +1329,98 @@ export default function AdminPanel() {
     }
   };
 
+  // ─── Unit CRUD ───
+
+  const saveUnitsToGitHub = async (updated: UnitOption[], types: string[], commitMessage: string) => {
+    const getResponse = await fetch('/api/github?action=get-file&path=master/dropdown-values/product/unit/all.json');
+    const getData = await getResponse.json();
+
+    const response = await fetch('/api/github', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update-file',
+        path: 'master/dropdown-values/product/unit/all.json',
+        content: { total: updated.length, types, units: updated },
+        message: commitMessage,
+        ...(getData.sha ? { sha: getData.sha } : {}),
+      }),
+    });
+    return response.json();
+  };
+
+  const addUnitOption = async (label: string, types: string[]) => {
+    if (!label.trim()) return;
+    setLoading(true);
+    try {
+      const id = label.trim().toLowerCase().replace(/\s+/g, '-');
+      if (unitOptions.find(u => u.id === id)) {
+        showMessage('error', `Unit "${label}" already exists`);
+        setLoading(false);
+        return;
+      }
+      const newUnit: UnitOption = { id, label: label.trim(), order: unitOptions.length + 1, types };
+      const updated = [...unitOptions, newUnit];
+      // Add any new types
+      const allTypes = Array.from(new Set([...unitTypes, ...types]));
+
+      const data = await saveUnitsToGitHub(updated, allTypes, `Add unit option: ${label}`);
+      if (data.success) {
+        setUnitOptions(updated);
+        setUnitTypes(allTypes);
+        showMessage('success', `Unit "${label}" added`);
+      } else {
+        showMessage('error', data.error || 'Failed to add unit');
+      }
+    } catch (error) {
+      showMessage('error', 'Failed to add unit');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteUnitOption = async (unit: UnitOption) => {
+    if (!confirm(`Delete unit "${unit.label}"?`)) return;
+    setLoading(true);
+    try {
+      const updated = unitOptions.filter(u => u.id !== unit.id).map((u, i) => ({ ...u, order: i + 1 }));
+
+      const data = await saveUnitsToGitHub(updated, unitTypes, `Delete unit option: ${unit.label}`);
+      if (data.success) {
+        setUnitOptions(updated);
+        showMessage('success', `Unit "${unit.label}" deleted`);
+      } else {
+        showMessage('error', data.error || 'Failed to delete unit');
+      }
+    } catch (error) {
+      showMessage('error', 'Failed to delete unit');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reorderUnits = async (fromIndex: number, direction: 'up' | 'down') => {
+    const toIndex = direction === 'up' ? fromIndex - 1 : fromIndex + 1;
+    if (toIndex < 0 || toIndex >= unitOptions.length) return;
+    setLoading(true);
+    try {
+      const updated = [...unitOptions];
+      [updated[fromIndex], updated[toIndex]] = [updated[toIndex], updated[fromIndex]];
+      const reordered = updated.map((u, i) => ({ ...u, order: i + 1 }));
+
+      const data = await saveUnitsToGitHub(reordered, unitTypes, `Reorder unit options`);
+      if (data.success) {
+        setUnitOptions(reordered);
+      } else {
+        showMessage('error', 'Failed to reorder units');
+      }
+    } catch (error) {
+      showMessage('error', 'Failed to reorder units');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Navigate to subcategories
   const navigateToSubCategories = (category: Category) => {
     setSelectedCategory(category);
@@ -1538,7 +1484,7 @@ export default function AdminPanel() {
       <div className={`${sizeClasses[size]} relative group ${className}`}>
         {/* Main Image */}
         <img
-          src={images[currentIndex]}
+          src={getFreshImageUrl(images[currentIndex])}
           alt={`Product image ${currentIndex + 1}`}
           className="w-full h-full object-cover rounded-lg"
           onError={(e) => {
@@ -1604,21 +1550,28 @@ export default function AdminPanel() {
   // B2C PREVIEW COMPONENTS
   // ============================================
 
-  // B2C Category Card Preview
+  // B2C Category Card Preview — matches B2C app's separate text approach
   const B2CCategoryCard = ({ category }: { category: Category }) => (
     <div
       className="cursor-pointer hover:scale-105 transition-transform"
       onClick={() => navigateToSubCategories(category)}
     >
-      <div className="bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-        <img
-          src={category.image}
-          alt={category.name}
-          className="w-full h-24 object-scale-down p-2"
-          onError={(e) => {
-            e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999" font-size="12">No Image</text></svg>';
-          }}
-        />
+      <div className="flex flex-col items-center rounded-lg overflow-hidden bg-white shadow-sm hover:shadow-md transition-shadow">
+        <div
+          className="w-full aspect-square flex items-center justify-center p-2 rounded-lg"
+        >
+          <img
+            src={getFreshImageUrl(category.image)}
+            alt={category.name}
+            className="w-full h-full object-contain"
+            onError={(e) => {
+              e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999" font-size="12">No Image</text></svg>';
+            }}
+          />
+        </div>
+        <p className="text-xs font-semibold text-center text-gray-800 mt-1 mb-1 px-1 line-clamp-2 leading-tight">
+          {category.name}
+        </p>
       </div>
     </div>
   );
@@ -1631,14 +1584,18 @@ export default function AdminPanel() {
       }`}
       onClick={() => navigateToProducts(subcat)}
     >
-      <img
-        src={subcat.image}
-        alt={subcat.name}
-        className="w-14 h-14 object-cover rounded-lg"
-        onError={(e) => {
-          e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="56" height="56" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999" font-size="8">No Img</text></svg>';
-        }}
-      />
+      <div
+        className="w-14 h-14 flex items-center justify-center rounded-lg p-1 flex-shrink-0"
+      >
+        <img
+          src={getFreshImageUrl(subcat.image)}
+          alt={subcat.name}
+          className="w-12 h-12 object-contain"
+          onError={(e) => {
+            e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="56" height="56" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999" font-size="8">No Img</text></svg>';
+          }}
+        />
+      </div>
       <span className={`text-sm font-medium ${isActive ? 'text-green-700' : 'text-gray-700'}`}>
         {subcat.name}
       </span>
@@ -1782,7 +1739,7 @@ export default function AdminPanel() {
             <div>
               <div className="bg-white rounded-lg p-4 min-h-[300px] relative overflow-hidden">
                 <img
-                  src={product.image[currentImageIndex] || ''}
+                  src={getFreshImageUrl(product.image[currentImageIndex] || '')}
                   alt={product.name}
                   className="w-full h-full object-contain"
                 />
@@ -1824,7 +1781,7 @@ export default function AdminPanel() {
                     className={`w-16 h-16 cursor-pointer border-2 rounded ${index === currentImageIndex ? 'border-green-500' : 'border-gray-200'}`}
                     onClick={() => setCurrentImageIndex(index)}
                   >
-                    <img src={img} alt={`Thumb ${index}`} className="w-full h-full object-contain" />
+                    <img src={getFreshImageUrl(img)} alt={`Thumb ${index}`} className="w-full h-full object-contain" />
                   </div>
                 ))}
               </div>
@@ -1906,14 +1863,7 @@ export default function AdminPanel() {
                   setAddImagePreview(null);
                   setProductImages([]);
                   setShowMoreDetails(false);
-                  // Reset composite state
-                  setCompositeLabel('');
-                  setCompositeBgColor('#FFF5E6');
-                  setCompositeTextColor('#1a1a1a');
-                  setCompositePreview(null);
-                  setCompositeFile(null);
-                  setRawPhotoPreview(null);
-                  setRawPhotoFile(null);
+                  setSelectedUnitType('');
                 }}
                 className="p-2 hover:bg-gray-100 rounded-lg"
               >
@@ -1962,158 +1912,60 @@ export default function AdminPanel() {
                     />
                   </div>
 
-                  {/* Composite Image Builder (Blinkit-style) */}
-                  <div className="border-2 border-dashed border-purple-300 rounded-xl p-4 bg-purple-50/50">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Sparkles className="w-5 h-5 text-purple-600" />
-                      <h3 className="font-semibold text-purple-800">Image Card Builder</h3>
-                      <span className="text-xs text-purple-500 ml-auto">Photo + Label → Card Image</span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      {/* Left: Inputs */}
-                      <div className="space-y-3">
-                        {/* Photo Upload */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            <Upload className="w-3 h-3 inline mr-1" /> Product Photo *
-                          </label>
-                          {rawPhotoPreview ? (
-                            <div className="relative">
-                              <img src={rawPhotoPreview} alt="Photo" className="w-full h-28 object-contain rounded-lg border bg-white" />
-                              <button
-                                onClick={() => { setRawPhotoFile(null); setRawPhotoPreview(null); setCompositePreview(null); setAddImageFile(null); setAddImagePreview(null); }}
-                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5"
-                              ><X className="w-3 h-3" /></button>
-                            </div>
-                          ) : (
-                            <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-white">
-                              <Upload className="w-8 h-8 text-gray-400 mb-1" />
-                              <p className="text-xs text-gray-500">Upload PNG/JPG</p>
-                              <p className="text-xs text-gray-400">(Max 5MB)</p>
-                              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => handleRawPhotoUpload(e, false)} className="hidden" />
-                            </label>
-                          )}
-                        </div>
-
-                        {/* Label */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            <Type className="w-3 h-3 inline mr-1" /> Label Text *
-                          </label>
-                          <input
-                            type="text"
-                            value={compositeLabel}
-                            onChange={(e) => setCompositeLabel(e.target.value)}
-                            placeholder="e.g. Atta, Rice & Dal"
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-sm"
-                          />
-                        </div>
-
-                        {/* Background Color */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            <Palette className="w-3 h-3 inline mr-1" /> Background Color
-                          </label>
-                          <div className="flex flex-wrap gap-1.5 mb-2">
-                            {bgColorPresets.map((preset) => (
-                              <button
-                                key={preset.color}
-                                onClick={() => setCompositeBgColor(preset.color)}
-                                className={`w-7 h-7 rounded-full border-2 transition-all ${compositeBgColor === preset.color ? 'border-purple-600 scale-110 shadow-md' : 'border-gray-200 hover:border-gray-400'}`}
-                                style={{ backgroundColor: preset.color }}
-                                title={preset.name}
-                              />
-                            ))}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <input type="color" value={compositeBgColor} onChange={(e) => setCompositeBgColor(e.target.value)} className="w-8 h-8 rounded cursor-pointer" />
-                            <input type="text" value={compositeBgColor} onChange={(e) => setCompositeBgColor(e.target.value)} className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs font-mono" />
-                          </div>
-                        </div>
-
-                        {/* Text Color */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Text Color</label>
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => setCompositeTextColor('#1a1a1a')} className={`px-3 py-1 rounded text-xs font-medium ${compositeTextColor === '#1a1a1a' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>Dark</button>
-                            <button onClick={() => setCompositeTextColor('#ffffff')} className={`px-3 py-1 rounded text-xs font-medium ${compositeTextColor === '#ffffff' ? 'bg-gray-800 text-white' : 'bg-gray-200'}`}>White</button>
-                            <input type="color" value={compositeTextColor} onChange={(e) => setCompositeTextColor(e.target.value)} className="w-6 h-6 rounded cursor-pointer" />
-                          </div>
-                        </div>
-
-                        {/* Generate Button */}
+                  {/* Product Photo Upload */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <Upload className="w-3 h-3 inline mr-1" /> Product Photo *
+                    </label>
+                    {addImagePreview ? (
+                      <div className="relative inline-block">
+                        <img src={addImagePreview} alt="Photo" className="w-32 h-32 object-contain rounded-lg border bg-white" />
                         <button
-                          onClick={() => generateAndPreviewComposite(false)}
-                          disabled={!rawPhotoPreview || !compositeLabel.trim()}
-                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-40 disabled:cursor-not-allowed font-medium text-sm"
-                        >
-                          <Sparkles className="w-4 h-4" />
-                          Generate Card Image
-                        </button>
+                          onClick={() => { setAddImageFile(null); setAddImagePreview(null); }}
+                          className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-0.5"
+                        ><X className="w-3 h-3" /></button>
                       </div>
-
-                      {/* Right: Preview */}
-                      <div className="flex flex-col items-center justify-center">
-                        <label className="block text-sm font-medium text-gray-500 mb-2 text-center">Generated Preview</label>
-                        {compositePreview ? (
-                          <div className="space-y-2 text-center">
-                            <img src={compositePreview} alt="Generated Card" className="w-48 h-48 object-contain rounded-2xl shadow-lg border" />
-                            <p className="text-xs text-green-600 font-medium flex items-center justify-center gap-1">
-                              <CheckCircle className="w-3 h-3" /> 400×400px PNG Ready
-                            </p>
-                            <button
-                              onClick={() => { setCompositePreview(null); setAddImageFile(null); setAddImagePreview(null); }}
-                              className="text-red-500 text-xs hover:underline"
-                            >
-                              Clear & Regenerate
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="w-48 h-48 border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center bg-white text-gray-400">
-                            <ImagePlus className="w-10 h-10 mb-2" />
-                            <p className="text-xs text-center px-4">Upload photo & enter label, then click Generate</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Or upload directly */}
-                    <div className="mt-4 pt-3 border-t border-purple-200">
-                      <details className="text-xs text-gray-500">
-                        <summary className="cursor-pointer hover:text-gray-700">Or upload a pre-made image directly</summary>
-                        <div className="mt-2">
-                          <label className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 text-sm">
-                            <Upload className="w-4 h-4" />
-                            Upload pre-made image (PNG, Max 2MB)
-                            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAddImageUpload} className="hidden" />
-                          </label>
-                          {addImagePreview && !compositePreview && (
-                            <div className="mt-2 flex items-center gap-2">
-                              <img src={addImagePreview} alt="Uploaded" className="w-16 h-16 object-contain rounded border" />
-                              <button onClick={() => { setAddImageFile(null); setAddImagePreview(null); }} className="text-red-500 text-xs hover:underline">Remove</button>
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                    </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
+                        <Upload className="w-8 h-8 text-gray-400 mb-1" />
+                        <p className="text-xs text-gray-500">Upload PNG/JPG/WebP</p>
+                        <p className="text-xs text-gray-400">(Max 5MB)</p>
+                        <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAddImageUpload} className="hidden" />
+                      </label>
+                    )}
                   </div>
+
                 </>
               )}
 
               {formMode === 'add-product' && (
                 <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Product Name *
-                    </label>
-                    <input
-                      type="text"
-                      value={addFormData.name || ''}
-                      onChange={(e) => setAddFormData({ ...addFormData, name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Product Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={addFormData.name || ''}
+                        onChange={(e) => setAddFormData({ ...addFormData, name: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Stock
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={addFormData.stock ?? ''}
+                        onChange={(e) => setAddFormData({ ...addFormData, stock: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="0"
+                      />
+                    </div>
                   </div>
 
                   {/* Product Images Upload */}
@@ -2159,35 +2011,11 @@ export default function AdminPanel() {
                       </label>
                       <input
                         type="number"
-                        value={addFormData.price || ''}
-                        onChange={(e) => setAddFormData({ ...addFormData, price: parseFloat(e.target.value) })}
+                        min="0"
+                        value={addFormData.price ?? ''}
+                        onChange={(e) => setAddFormData({ ...addFormData, price: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Stock
-                      </label>
-                      <input
-                        type="number"
-                        value={addFormData.stock || 0}
-                        onChange={(e) => setAddFormData({ ...addFormData, stock: parseInt(e.target.value) })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Unit
-                      </label>
-                      <input
-                        type="text"
-                        value={addFormData.unit || '1 Piece'}
-                        onChange={(e) => setAddFormData({ ...addFormData, unit: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
                     <div>
@@ -2196,10 +2024,48 @@ export default function AdminPanel() {
                       </label>
                       <input
                         type="number"
-                        value={addFormData.discount || 0}
-                        onChange={(e) => setAddFormData({ ...addFormData, discount: parseInt(e.target.value) })}
+                        min="0"
+                        max="100"
+                        value={addFormData.discount ?? ''}
+                        onChange={(e) => setAddFormData({ ...addFormData, discount: e.target.value === '' ? 0 : parseInt(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="0"
                       />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Unit Type
+                      </label>
+                      <select
+                        value={selectedUnitType}
+                        onChange={(e) => { setSelectedUnitType(e.target.value); setAddFormData({ ...addFormData, unit: '' }); }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="">All</option>
+                        {unitTypes.map((t) => (
+                          <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Unit *
+                      </label>
+                      <select
+                        value={addFormData.unit || ''}
+                        onChange={(e) => setAddFormData({ ...addFormData, unit: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="">Select unit</option>
+                        {unitOptions
+                          .filter((u) => !selectedUnitType || u.types.includes(selectedUnitType))
+                          .map((u) => (
+                            <option key={u.id} value={u.label}>{u.label}</option>
+                          ))}
+                      </select>
                     </div>
                   </div>
 
@@ -2277,6 +2143,7 @@ export default function AdminPanel() {
                   setAddImagePreview(null);
                   setProductImages([]);
                   setShowMoreDetails(false);
+                  setSelectedUnitType('');
                 }}
                 disabled={loading}
                 className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
@@ -2535,8 +2402,8 @@ export default function AdminPanel() {
                     </li>
                   </ul>
                   <div className="mt-2 ml-6 text-xs bg-blue-100 p-2 rounded font-mono">
-                    NEXT_PUBLIC_API_URL=&apos;...@{newVersion}/kb-v2&apos;<br/>
-                    CDN_BASE_URL=&apos;...@{newVersion}/kb-v2&apos;
+                    NEXT_PUBLIC_API_URL=&apos;...@{newVersion}/{DATA_PATH}&apos;<br/>
+                    CDN_BASE_URL=&apos;...@{newVersion}/{DATA_PATH}&apos;
                   </div>
                   <ul className="text-sm text-blue-700 space-y-2 mt-3">
                     <li className="flex items-center gap-2">
@@ -2550,7 +2417,7 @@ export default function AdminPanel() {
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <p className="text-sm font-medium text-gray-700 mb-2">B2C CDN URL:</p>
                   <code className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded break-all block">
-                    https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@{newVersion || 'v1.0.0'}/kb-v2/
+                    https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@{newVersion || 'v1.0.0'}/{DATA_PATH}/
                   </code>
                 </div>
 
@@ -2618,6 +2485,209 @@ export default function AdminPanel() {
     );
   };
 
+  // ─── Render Units Management ───
+  const renderUnits = () => {
+    const filtered = unitFilterType
+      ? unitOptions.filter(u => u.types.includes(unitFilterType))
+      : unitOptions;
+
+    return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setViewMode('dashboard')}
+            className="p-2 hover:bg-gray-100 rounded-lg transition"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <h2 className="text-2xl font-bold text-gray-900">Manage Units</h2>
+          <span className="text-sm text-gray-500">({unitOptions.length} units · {unitTypes.length} types)</span>
+        </div>
+      </div>
+
+      {/* Types management */}
+      <div className="bg-white p-4 rounded-lg shadow-md">
+        <h3 className="text-sm font-semibold text-gray-700 mb-2">Unit Types</h3>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {unitTypes.map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm font-medium">
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+              <button
+                onClick={async () => {
+                  if (!confirm(`Remove type "${t}"? Units with this type will keep their other types.`)) return;
+                  const updatedTypes = unitTypes.filter(ut => ut !== t);
+                  const updatedUnits = unitOptions.map(u => ({ ...u, types: u.types.filter(ut => ut !== t) }));
+                  setLoading(true);
+                  const data = await saveUnitsToGitHub(updatedUnits, updatedTypes, `Remove unit type: ${t}`);
+                  if (data.success) { setUnitTypes(updatedTypes); setUnitOptions(updatedUnits); }
+                  setLoading(false);
+                }}
+                className="ml-1 text-blue-400 hover:text-red-500"
+                title={`Remove type "${t}"`}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="New type (e.g. weight)"
+            value={newTypeName}
+            onChange={(e) => setNewTypeName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newTypeName.trim()) {
+                const t = newTypeName.trim().toLowerCase();
+                if (!unitTypes.includes(t)) {
+                  const updatedTypes = [...unitTypes, t];
+                  setUnitTypes(updatedTypes);
+                  saveUnitsToGitHub(unitOptions, updatedTypes, `Add unit type: ${t}`);
+                }
+                setNewTypeName('');
+              }
+            }}
+            className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={() => {
+              const t = newTypeName.trim().toLowerCase();
+              if (t && !unitTypes.includes(t)) {
+                const updatedTypes = [...unitTypes, t];
+                setUnitTypes(updatedTypes);
+                saveUnitsToGitHub(unitOptions, updatedTypes, `Add unit type: ${t}`);
+              }
+              setNewTypeName('');
+            }}
+            disabled={!newTypeName.trim()}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            Add Type
+          </button>
+        </div>
+      </div>
+
+      {/* Add new unit */}
+      <div className="bg-white p-4 rounded-lg shadow-md">
+        <h3 className="text-sm font-semibold text-gray-700 mb-2">Add New Unit</h3>
+        <div className="flex gap-3 mb-3">
+          <input
+            type="text"
+            placeholder="e.g. 750 g"
+            value={newUnitLabel}
+            onChange={(e) => setNewUnitLabel(e.target.value)}
+            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={() => {
+              if (newUnitLabel.trim()) {
+                addUnitOption(newUnitLabel, newUnitTypes);
+                setNewUnitLabel('');
+                setNewUnitTypes([]);
+              }
+            }}
+            disabled={loading || !newUnitLabel.trim() || newUnitTypes.length === 0}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Add
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="text-xs text-gray-500 py-1">Tags:</span>
+          {unitTypes.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setNewUnitTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${
+                newUnitTypes.includes(t)
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-600">Filter:</span>
+        <button
+          onClick={() => setUnitFilterType('')}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition ${!unitFilterType ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+        >
+          All ({unitOptions.length})
+        </button>
+        {unitTypes.map((t) => (
+          <button
+            key={t}
+            onClick={() => setUnitFilterType(unitFilterType === t ? '' : t)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition ${unitFilterType === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            {t.charAt(0).toUpperCase() + t.slice(1)} ({unitOptions.filter(u => u.types.includes(t)).length})
+          </button>
+        ))}
+      </div>
+
+      {/* Unit list */}
+      <div className="bg-white rounded-lg shadow-md divide-y">
+        {filtered.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            <p>{unitFilterType ? `No units tagged "${unitFilterType}".` : 'No unit options yet. Add your first unit above.'}</p>
+          </div>
+        ) : (
+          filtered.map((unit, index) => {
+            const globalIndex = unitOptions.findIndex(u => u.id === unit.id);
+            return (
+            <div key={unit.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-400 w-6 text-right">{unit.order}</span>
+                <span className="font-medium text-gray-800">{unit.label}</span>
+                <div className="flex gap-1">
+                  {unit.types.map(t => (
+                    <span key={t} className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-xs">{t}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => reorderUnits(globalIndex, 'up')}
+                  disabled={globalIndex === 0 || loading}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded disabled:opacity-30"
+                  title="Move up"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => reorderUnits(globalIndex, 'down')}
+                  disabled={globalIndex === unitOptions.length - 1 || loading}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded disabled:opacity-30"
+                  title="Move down"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => deleteUnitOption(unit)}
+                  disabled={loading}
+                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-30 ml-2"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+    );
+  };
+
   // Render Dashboard
   const renderDashboard = () => (
     <div className="space-y-6">
@@ -2662,6 +2732,13 @@ export default function AdminPanel() {
           >
             <Package className="w-4 h-4" />
             Manage Categories
+          </button>
+          <button
+            onClick={() => setViewMode('units')}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
+          >
+            <Settings className="w-4 h-4" />
+            Manage Units
           </button>
         </div>
       </div>
@@ -2730,7 +2807,7 @@ export default function AdminPanel() {
               <span>Working Branch: <strong>main</strong></span>
             </div>
             <p className="text-sm text-gray-600 mt-1">
-              Repository: iFrugal/json-data-keeper/kb-v2
+              Repository: iFrugal/json-data-keeper/{DATA_PATH}
             </p>
           </div>
           <button
@@ -2814,8 +2891,9 @@ export default function AdminPanel() {
                         <label className="block text-sm font-medium text-gray-700 mb-1">Order</label>
                         <input
                           type="number"
-                          value={editFormData?.order || 0}
-                          onChange={(e) => setEditFormData({ ...editFormData, order: parseInt(e.target.value) })}
+                          min="1"
+                          value={editFormData?.order ?? ''}
+                          onChange={(e) => setEditFormData({ ...editFormData, order: e.target.value === '' ? 1 : parseInt(e.target.value) })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
@@ -2826,9 +2904,9 @@ export default function AdminPanel() {
                     </div>
                   </div>
 
-                  {/* Current Image + Composite Regeneration */}
+                  {/* Product Photo */}
                   <div className="border rounded-lg p-3 bg-white">
-                    <p className="text-sm font-medium text-gray-700 mb-2">Current Image</p>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Product Photo</p>
                     <div className="flex items-start gap-4">
                       <div>
                         {imagePreview ? (
@@ -2842,51 +2920,9 @@ export default function AdminPanel() {
                       <div className="flex-1 space-y-2">
                         <label className="flex items-center gap-2 px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 text-sm">
                           <Upload className="w-4 h-4" />
-                          Upload pre-made image
+                          Upload new photo
                           <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                         </label>
-
-                        <details className="text-xs">
-                          <summary className="cursor-pointer text-purple-600 hover:text-purple-800 font-medium flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" /> Or regenerate composite card
-                          </summary>
-                          <div className="mt-2 space-y-2 p-2 bg-purple-50 rounded-lg">
-                            <div>
-                              <label className="block text-xs font-medium text-gray-600 mb-1">Photo</label>
-                              {editRawPhotoPreview ? (
-                                <div className="relative inline-block">
-                                  <img src={editRawPhotoPreview} alt="Photo" className="w-20 h-20 object-contain rounded border bg-white" />
-                                  <button onClick={() => { setEditRawPhotoFile(null); setEditRawPhotoPreview(null); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5"><X className="w-2.5 h-2.5" /></button>
-                                </div>
-                              ) : (
-                                <label className="inline-flex items-center gap-1 px-2 py-1 bg-white border rounded cursor-pointer text-xs hover:bg-gray-50">
-                                  <Upload className="w-3 h-3" /> Upload photo
-                                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => handleRawPhotoUpload(e, true)} className="hidden" />
-                                </label>
-                              )}
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-gray-600 mb-1">Label</label>
-                              <input type="text" value={editCompositeLabel} onChange={(e) => setEditCompositeLabel(e.target.value)} placeholder="e.g. Atta, Rice & Dal" className="w-full px-2 py-1 border rounded text-xs" />
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs text-gray-600">BG:</label>
-                              <div className="flex gap-1">
-                                {bgColorPresets.slice(0, 6).map((p) => (
-                                  <button key={p.color} onClick={() => setEditCompositeBgColor(p.color)} className={`w-5 h-5 rounded-full border ${editCompositeBgColor === p.color ? 'border-purple-600 scale-110' : 'border-gray-200'}`} style={{ backgroundColor: p.color }} />
-                                ))}
-                              </div>
-                              <input type="color" value={editCompositeBgColor} onChange={(e) => setEditCompositeBgColor(e.target.value)} className="w-5 h-5 rounded cursor-pointer" />
-                            </div>
-                            <button
-                              onClick={() => generateAndPreviewComposite(true)}
-                              disabled={!editRawPhotoPreview || !editCompositeLabel.trim()}
-                              className="w-full flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-40"
-                            >
-                              <Sparkles className="w-3 h-3" /> Generate
-                            </button>
-                          </div>
-                        </details>
                       </div>
                     </div>
                   </div>
@@ -2912,14 +2948,17 @@ export default function AdminPanel() {
                 </div>
               ) : (
                 <div className="flex items-center gap-4">
-                  <img
-                    src={category.image}
-                    alt={category.name}
-                    className="w-20 h-20 object-cover rounded-lg"
-                    onError={(e) => {
-                      e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23ddd"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999">No Image</text></svg>';
-                    }}
-                  />
+                  {/* Category tile preview */}
+                  <div className="w-20 h-20 rounded-lg flex items-center justify-center p-1 bg-gray-50">
+                    <img
+                      src={getFreshImageUrl(category.image)}
+                      alt={category.name}
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23ddd"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999">No Image</text></svg>';
+                      }}
+                    />
+                  </div>
                   <div className="flex-1">
                     <h3
                       className="text-lg font-semibold cursor-pointer hover:text-blue-600"
@@ -3041,8 +3080,9 @@ export default function AdminPanel() {
                         <label className="block text-sm font-medium text-gray-700 mb-1">Order</label>
                         <input
                           type="number"
-                          value={editFormData?.order || 0}
-                          onChange={(e) => setEditFormData({ ...editFormData, order: parseInt(e.target.value) })}
+                          min="1"
+                          value={editFormData?.order ?? ''}
+                          onChange={(e) => setEditFormData({ ...editFormData, order: e.target.value === '' ? 1 : parseInt(e.target.value) })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
@@ -3053,9 +3093,9 @@ export default function AdminPanel() {
                     </div>
                   </div>
 
-                  {/* Current Image + Composite Regeneration */}
+                  {/* Product Photo */}
                   <div className="border rounded-lg p-3 bg-white">
-                    <p className="text-sm font-medium text-gray-700 mb-2">Current Image</p>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Product Photo</p>
                     <div className="flex items-start gap-4">
                       <div>
                         {imagePreview ? (
@@ -3069,51 +3109,9 @@ export default function AdminPanel() {
                       <div className="flex-1 space-y-2">
                         <label className="flex items-center gap-2 px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 text-sm">
                           <Upload className="w-4 h-4" />
-                          Upload pre-made image
+                          Upload new photo
                           <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                         </label>
-
-                        <details className="text-xs">
-                          <summary className="cursor-pointer text-purple-600 hover:text-purple-800 font-medium flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" /> Or regenerate composite card
-                          </summary>
-                          <div className="mt-2 space-y-2 p-2 bg-purple-50 rounded-lg">
-                            <div>
-                              <label className="block text-xs font-medium text-gray-600 mb-1">Photo</label>
-                              {editRawPhotoPreview ? (
-                                <div className="relative inline-block">
-                                  <img src={editRawPhotoPreview} alt="Photo" className="w-20 h-20 object-contain rounded border bg-white" />
-                                  <button onClick={() => { setEditRawPhotoFile(null); setEditRawPhotoPreview(null); }} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5"><X className="w-2.5 h-2.5" /></button>
-                                </div>
-                              ) : (
-                                <label className="inline-flex items-center gap-1 px-2 py-1 bg-white border rounded cursor-pointer text-xs hover:bg-gray-50">
-                                  <Upload className="w-3 h-3" /> Upload photo
-                                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => handleRawPhotoUpload(e, true)} className="hidden" />
-                                </label>
-                              )}
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-gray-600 mb-1">Label</label>
-                              <input type="text" value={editCompositeLabel} onChange={(e) => setEditCompositeLabel(e.target.value)} placeholder="e.g. Rice Bran" className="w-full px-2 py-1 border rounded text-xs" />
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs text-gray-600">BG:</label>
-                              <div className="flex gap-1">
-                                {bgColorPresets.slice(0, 6).map((p) => (
-                                  <button key={p.color} onClick={() => setEditCompositeBgColor(p.color)} className={`w-5 h-5 rounded-full border ${editCompositeBgColor === p.color ? 'border-purple-600 scale-110' : 'border-gray-200'}`} style={{ backgroundColor: p.color }} />
-                                ))}
-                              </div>
-                              <input type="color" value={editCompositeBgColor} onChange={(e) => setEditCompositeBgColor(e.target.value)} className="w-5 h-5 rounded cursor-pointer" />
-                            </div>
-                            <button
-                              onClick={() => generateAndPreviewComposite(true)}
-                              disabled={!editRawPhotoPreview || !editCompositeLabel.trim()}
-                              className="w-full flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-40"
-                            >
-                              <Sparkles className="w-3 h-3" /> Generate
-                            </button>
-                          </div>
-                        </details>
                       </div>
                     </div>
                   </div>
@@ -3139,14 +3137,17 @@ export default function AdminPanel() {
                 </div>
               ) : (
                 <div className="flex items-center gap-4">
-                  <img
-                    src={subcat.image}
-                    alt={subcat.name}
-                    className="w-20 h-20 object-cover rounded-lg"
-                    onError={(e) => {
-                      e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23ddd"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999">No Image</text></svg>';
-                    }}
-                  />
+                  {/* Subcategory image */}
+                  <div className="w-20 h-20 rounded-lg flex items-center justify-center p-1 bg-gray-50">
+                    <img
+                      src={getFreshImageUrl(subcat.image)}
+                      alt={subcat.name}
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23ddd"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999">No Image</text></svg>';
+                      }}
+                    />
+                  </div>
                   <div className="flex-1">
                     <h3
                       className="text-lg font-semibold cursor-pointer hover:text-blue-600"
@@ -3310,29 +3311,23 @@ export default function AdminPanel() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Unit</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Stock</label>
                       <input
-                        type="text"
-                        value={editFormData?.unit || ''}
-                        onChange={(e) => setEditFormData({ ...editFormData, unit: e.target.value })}
+                        type="number"
+                        min="0"
+                        value={editFormData?.stock ?? ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, stock: e.target.value === '' ? 0 : parseInt(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="0"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Price</label>
                       <input
                         type="number"
-                        value={editFormData?.price || 0}
-                        onChange={(e) => setEditFormData({ ...editFormData, price: parseFloat(e.target.value) })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Stock</label>
-                      <input
-                        type="number"
-                        value={editFormData?.stock || 0}
-                        onChange={(e) => setEditFormData({ ...editFormData, stock: parseInt(e.target.value) })}
+                        min="0"
+                        value={editFormData?.price ?? ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, price: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
@@ -3340,10 +3335,44 @@ export default function AdminPanel() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Discount %</label>
                       <input
                         type="number"
-                        value={editFormData?.discount || 0}
-                        onChange={(e) => setEditFormData({ ...editFormData, discount: parseInt(e.target.value) })}
+                        min="0"
+                        max="100"
+                        value={editFormData?.discount ?? ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, discount: e.target.value === '' ? 0 : parseInt(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="0"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Unit Type</label>
+                      <select
+                        value={editSelectedUnitType}
+                        onChange={(e) => { setEditSelectedUnitType(e.target.value); setEditFormData({ ...editFormData, unit: '' }); }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="">All</option>
+                        {unitTypes.map((t) => (
+                          <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Unit</label>
+                      <select
+                        value={editFormData?.unit || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, unit: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="">Select unit</option>
+                        {unitOptions
+                          .filter((u) => !editSelectedUnitType || u.types.includes(editSelectedUnitType))
+                          .map((u) => (
+                            <option key={u.id} value={u.label}>{u.label}</option>
+                          ))}
+                        {editFormData?.unit && !unitOptions.find(u => u.label === editFormData.unit) && (
+                          <option value={editFormData.unit}>{editFormData.unit} (custom)</option>
+                        )}
+                      </select>
                     </div>
                     <div className="flex items-center gap-2 pt-6">
                       <input
@@ -3617,6 +3646,7 @@ export default function AdminPanel() {
         {viewMode === 'categories' && renderCategories()}
         {viewMode === 'subcategories' && renderSubCategories()}
         {viewMode === 'products' && renderProducts()}
+        {viewMode === 'units' && renderUnits()}
       </main>
     </div>
   );

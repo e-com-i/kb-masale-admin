@@ -112,7 +112,7 @@ Edit `app/api/github/route.ts`:
 const GITHUB_OWNER = 'YourUsername';
 const GITHUB_REPO = 'your-repo-name';
 const GITHUB_BRANCH = 'main';
-const BASE_PATH = 'kb-v2';
+const BASE_PATH = 'kb-v3';
 ```
 
 ### Using Different CDN?

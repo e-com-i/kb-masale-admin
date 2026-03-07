@@ -123,7 +123,7 @@
 ### Your GitHub Repository Structure:
 ```
 iFrugal/json-data-keeper/
-└── kb-v2/
+└── kb-v3/
     ├── master/
     │   └── category/
     │       ├── all.json                           ← All categories

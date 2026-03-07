@@ -100,14 +100,14 @@ Edit `app/api/github/route.ts` if your repo details are different:
 const GITHUB_OWNER = 'iFrugal';              // Your GitHub username
 const GITHUB_REPO = 'json-data-keeper';      // Your repo name
 const GITHUB_BRANCH = 'main';                // Branch name
-const BASE_PATH = 'kb-v2';                   // Base path in repo
+const BASE_PATH = 'kb-v3';                   // Base path in repo
 ```
 
 ### Image CDN URL
 
 The app uses jsDelivr CDN. Base URL is:
 ```
-https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@main/kb-v2
+https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@main/kb-v3
 ```
 
 ## 📂 Data Structure
@@ -175,7 +175,7 @@ https://cdn.jsdelivr.net/gh/iFrugal/json-data-keeper@main/kb-v2
 ## 🖼️ Image Structure
 
 ```
-kb-v2/
+kb-v3/
   images/
     category/
       {category_id}/
