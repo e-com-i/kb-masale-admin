@@ -88,6 +88,7 @@ interface Product {
   price: number;
   discount?: number;
   pcsPerUnit?: number;
+  perUnitLabel?: string; // "pc" | "kg" | "g" | "L" — defaults to "pc"
   description: string;
   more_details: MoreDetails;
   publish: boolean;
@@ -242,6 +243,7 @@ export default function AdminPanel() {
     productOrder: number;
     unit: string;
     pcsPerUnit?: number;
+    perUnitLabel?: string;
     originalPrice: number;
     originalStock: number;
     price: number;
@@ -1047,7 +1049,8 @@ export default function AdminPanel() {
     // Validate pcsPerUnit if the unit requires it
     const selectedUnit = unitOptions.find(u => u.label === addFormData.unit);
     if (selectedUnit?.showPricePerPiece && (!addFormData.pcsPerUnit || addFormData.pcsPerUnit < 1)) {
-      showMessage('error', 'Please enter Pieces Per Unit for the selected unit');
+
+      showMessage('error', 'Please enter Qty Per Unit for the selected unit');
       return;
     }
 
@@ -1076,7 +1079,7 @@ export default function AdminPanel() {
         stock: addFormData.stock || 0,
         price: addFormData.price || 0,
         discount: addFormData.discount || 0,
-        ...(addFormData.pcsPerUnit ? { pcsPerUnit: addFormData.pcsPerUnit } : {}),
+        ...(addFormData.pcsPerUnit ? { pcsPerUnit: addFormData.pcsPerUnit, perUnitLabel: addFormData.perUnitLabel || 'pc' } : {}),
         description: addFormData.description || '',
         more_details: addFormData.more_details || defaultMoreDetails,
         publish: addFormData.publish !== false,
@@ -1342,7 +1345,7 @@ export default function AdminPanel() {
     // Validate pcsPerUnit if the unit requires it
     const editSelectedUnit = unitOptions.find(u => u.label === editFormData.unit);
     if (editSelectedUnit?.showPricePerPiece && (!editFormData.pcsPerUnit || editFormData.pcsPerUnit < 1)) {
-      showMessage('error', 'Please enter Pieces Per Unit for the selected unit');
+      showMessage('error', 'Please enter Qty Per Unit for the selected unit');
       return;
     }
     setLoading(true);
@@ -1543,6 +1546,7 @@ export default function AdminPanel() {
         productOrder: 0,
         unit: prod.unit,
         pcsPerUnit: prod.pcsPerUnit,
+        perUnitLabel: prod.perUnitLabel,
         originalPrice: prod.price,
         originalStock: prod.stock,
         price: prod.price,
@@ -1974,7 +1978,7 @@ export default function AdminPanel() {
         </div>
 
         <div className="w-fit gap-1 px-2 lg:px-0 text-sm lg:text-base text-gray-500">
-          {product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''}
+          {product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} ${product.perUnitLabel || 'pcs'})` : ''}
         </div>
 
         <div className="px-2 lg:px-0 flex items-center justify-between gap-1 lg:gap-3 text-sm lg:text-base">
@@ -1989,7 +1993,7 @@ export default function AdminPanel() {
             )}
             {product.pcsPerUnit && product.pcsPerUnit > 1 && (
               <div className="text-xs text-gray-500">
-                {DisplayPriceInRupees(discountedPrice / product.pcsPerUnit)}/pc
+                {DisplayPriceInRupees(discountedPrice / product.pcsPerUnit)}/{product.perUnitLabel || 'pc'}
               </div>
             )}
           </div>
@@ -2083,7 +2087,7 @@ export default function AdminPanel() {
             <div className="space-y-4">
               <span className="bg-green-300 text-green-800 px-2 py-1 rounded-full text-sm">10 Min</span>
               <h1 className="text-2xl font-semibold">{product.name}</h1>
-              <p className="text-gray-500">{product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''}</p>
+              <p className="text-gray-500">{product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} ${product.perUnitLabel || 'pcs'})` : ''}</p>
 
               <div className="border-t pt-4">
                 <p className="text-gray-500 text-sm">Price</p>
@@ -2100,7 +2104,7 @@ export default function AdminPanel() {
                 </div>
                 {product.pcsPerUnit && product.pcsPerUnit > 1 && (
                   <p className="text-sm text-gray-500 mt-1">
-                    {product.unit} &middot; {DisplayPriceInRupees(discountedPrice / product.pcsPerUnit)}/pc
+                    {product.unit} &middot; {DisplayPriceInRupees(discountedPrice / product.pcsPerUnit)}/{product.perUnitLabel || 'pc'}
                   </p>
                 )}
               </div>
@@ -2120,7 +2124,7 @@ export default function AdminPanel() {
                 </div>
                 <div>
                   <p className="font-semibold">Unit</p>
-                  <p className="text-gray-600 text-sm">{product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''}</p>
+                  <p className="text-gray-600 text-sm">{product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} ${product.perUnitLabel || 'pcs'})` : ''}</p>
                 </div>
                 {product.more_details && Object.entries(product.more_details).map(([key, value]) => (
                   value && (
@@ -2370,20 +2374,33 @@ export default function AdminPanel() {
                   {addFormData.unit && unitOptions.find(u => u.label === addFormData.unit)?.showPricePerPiece && (
                     <div className="max-w-xs">
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Pieces Per Unit *
+                        Qty Per Unit *
                       </label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="99999"
-                        value={addFormData.pcsPerUnit ?? ''}
-                        onChange={(e) => setAddFormData({ ...addFormData, pcsPerUnit: e.target.value === '' ? undefined : parseInt(e.target.value) })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                        placeholder="e.g. 20"
-                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max="99999"
+                          value={addFormData.pcsPerUnit ?? ''}
+                          onChange={(e) => setAddFormData({ ...addFormData, pcsPerUnit: e.target.value === '' ? undefined : parseInt(e.target.value) })}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. 12 or 50"
+                        />
+                        <select
+                          value={addFormData.perUnitLabel || 'pc'}
+                          onChange={(e) => setAddFormData({ ...addFormData, perUnitLabel: e.target.value })}
+                          className="w-20 px-2 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                        >
+                          <option value="pc">pcs</option>
+                          <option value="kg">kg</option>
+                          <option value="g">g</option>
+                          <option value="L">L</option>
+                          <option value="ml">ml</option>
+                        </select>
+                      </div>
                       {addFormData.price > 0 && addFormData.pcsPerUnit > 0 && (
                         <p className="text-xs text-green-600 mt-1">
-                          Price/Pc: ₹{(priceWithDiscount(addFormData.price, addFormData.discount || 0) / addFormData.pcsPerUnit).toFixed(2)}
+                          Price/{addFormData.perUnitLabel || 'pc'}: ₹{(priceWithDiscount(addFormData.price, addFormData.discount || 0) / addFormData.pcsPerUnit).toFixed(2)}
                         </p>
                       )}
                     </div>
@@ -3217,7 +3234,7 @@ export default function AdminPanel() {
                           <div className="font-medium text-gray-900">{row.productName}</div>
                           <div className="text-xs text-gray-400 mt-0.5">
                             {row.categoryName}/{row.subCategoryName}
-                            {row.unit && <span className="ml-2 text-gray-500">· {row.unit}{row.pcsPerUnit && row.pcsPerUnit > 1 ? ` (${row.pcsPerUnit} pcs)` : ''}</span>}
+                            {row.unit && <span className="ml-2 text-gray-500">· {row.unit}{row.pcsPerUnit && row.pcsPerUnit > 1 ? ` (${row.pcsPerUnit} ${row.perUnitLabel || 'pcs'})` : ''}</span>}
                           </div>
                         </td>
                         <td className="px-4 py-2.5">
@@ -4145,22 +4162,35 @@ export default function AdminPanel() {
                       </select>
                     </div>
 
-                    {/* Pieces Per Unit — shown only when selected unit has showPricePerPiece */}
+                    {/* Qty Per Unit — shown only when selected unit has showPricePerPiece */}
                     {editFormData?.unit && unitOptions.find(u => u.label === editFormData.unit)?.showPricePerPiece && (
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Pieces Per Unit *</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="99999"
-                          value={editFormData?.pcsPerUnit ?? ''}
-                          onChange={(e) => setEditFormData({ ...editFormData, pcsPerUnit: e.target.value === '' ? undefined : parseInt(e.target.value) })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. 20"
-                        />
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Qty Per Unit *</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            min="1"
+                            max="99999"
+                            value={editFormData?.pcsPerUnit ?? ''}
+                            onChange={(e) => setEditFormData({ ...editFormData, pcsPerUnit: e.target.value === '' ? undefined : parseInt(e.target.value) })}
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                            placeholder="e.g. 12 or 50"
+                          />
+                          <select
+                            value={editFormData?.perUnitLabel || 'pc'}
+                            onChange={(e) => setEditFormData({ ...editFormData, perUnitLabel: e.target.value })}
+                            className="w-20 px-2 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                          >
+                            <option value="pc">pcs</option>
+                            <option value="kg">kg</option>
+                            <option value="g">g</option>
+                            <option value="L">L</option>
+                            <option value="ml">ml</option>
+                          </select>
+                        </div>
                         {editFormData?.price > 0 && editFormData?.pcsPerUnit > 0 && (
                           <p className="text-xs text-green-600 mt-1">
-                            Price/Pc: ₹{(priceWithDiscount(editFormData.price, editFormData.discount || 0) / editFormData.pcsPerUnit).toFixed(2)}
+                            Price/{editFormData?.perUnitLabel || 'pc'}: ₹{(priceWithDiscount(editFormData.price, editFormData.discount || 0) / editFormData.pcsPerUnit).toFixed(2)}
                           </p>
                         )}
                       </div>
@@ -4253,7 +4283,7 @@ export default function AdminPanel() {
                   <div className="flex-1">
                     <h3 className="text-lg font-semibold">{product.name}</h3>
                     <p className="text-sm text-gray-500">
-                      {DisplayPriceInRupees(product.price)} | {product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''} | Stock: {product.stock}
+                      {DisplayPriceInRupees(product.price)} | {product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} ${product.perUnitLabel || 'pcs'})` : ''} | Stock: {product.stock}
                       {product.discount ? ` | ${product.discount}% off` : ''}
                     </p>
                     {!product.publish && (
