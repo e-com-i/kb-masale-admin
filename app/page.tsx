@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import * as XLSX from 'xlsx';
 import {
   Package,
   FolderTree,
@@ -13,8 +14,10 @@ import {
   Save,
   X,
   Upload,
+  Download,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
@@ -44,6 +47,7 @@ interface UnitOption {
   label: string;
   order: number;
   types: string[];
+  showPricePerPiece?: boolean;
 }
 
 interface Category {
@@ -81,12 +85,22 @@ interface Product {
   stock: number;
   price: number;
   discount?: number;
+  pcsPerUnit?: number;
   description: string;
   more_details: MoreDetails;
   publish: boolean;
   createdAt?: string;
   updatedAt?: string;
   updatedBy?: string;
+}
+
+interface FlatProduct extends Product {
+  categoryId: string;
+  categoryName: string;
+  categoryOrder: number;
+  subCategoryId: string;
+  subCategoryName: string;
+  subCategoryOrder: number;
 }
 
 interface CategoriesData {
@@ -114,7 +128,7 @@ interface ProductsData {
   products: Product[];
 }
 
-type ViewMode = 'dashboard' | 'categories' | 'subcategories' | 'products' | 'units';
+type ViewMode = 'dashboard' | 'categories' | 'subcategories' | 'products' | 'units' | 'stock-price';
 type FormMode = 'add-category' | 'add-subcategory' | 'add-product' | null;
 
 // Helper: get fresh image URL — bypass CDN/browser cache for admin
@@ -159,6 +173,9 @@ export default function AdminPanel() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [subcategories, setSubcategories] = useState<SubCategory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  // Flat products master list — all products across all categories (single file)
+  const [allProducts, setAllProducts] = useState<FlatProduct[]>([]);
+  const [allProductsSha, setAllProductsSha] = useState<string | null>(null);
   const [unitOptions, setUnitOptions] = useState<UnitOption[]>([]);
   const [unitTypes, setUnitTypes] = useState<string[]>([]);
   const [selectedUnitType, setSelectedUnitType] = useState<string>('');  // for product form filter
@@ -201,9 +218,41 @@ export default function AdminPanel() {
   // Unit Management Screen State
   const [newUnitLabel, setNewUnitLabel] = useState('');
   const [newUnitTypes, setNewUnitTypes] = useState<string[]>([]);
+  const [newUnitShowPricePerPiece, setNewUnitShowPricePerPiece] = useState(false);
   const [newTypeName, setNewTypeName] = useState('');
   const [unitFilterType, setUnitFilterType] = useState<string>('');
+  const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
+  const [editUnitLabel, setEditUnitLabel] = useState('');
+  const [editUnitTypes, setEditUnitTypes] = useState<string[]>([]);
+  const [editUnitShowPricePerPiece, setEditUnitShowPricePerPiece] = useState(false);
   const [releaseNotes, setReleaseNotes] = useState('');
+
+  // Stock & Price Management State
+  interface StockPriceRow {
+    productId: string;
+    productName: string;
+    categoryId: string;
+    categoryName: string;
+    subCategoryId: string;
+    subCategoryName: string;
+    categoryOrder: number;
+    subCategoryOrder: number;
+    productOrder: number;
+    unit: string;
+    pcsPerUnit?: number;
+    originalPrice: number;
+    originalStock: number;
+    price: number;
+    stock: number;
+    discount?: number;
+  }
+  const [stockPriceRows, setStockPriceRows] = useState<StockPriceRow[]>([]);
+  const [stockPriceLoading, setStockPriceLoading] = useState(false);
+  const [stockPricePage, setStockPricePage] = useState(1);
+  const [stockPricePageSize, setStockPricePageSize] = useState(20);
+  const [showStockPricePublish, setShowStockPricePublish] = useState(false);
+  const [markOutOfStockStep, setMarkOutOfStockStep] = useState<0 | 1 | 2>(0); // 0=hidden, 1=first confirm, 2=type confirm
+  const [markOutOfStockInput, setMarkOutOfStockInput] = useState('');
 
   // Publish Steps State for live updates
   interface PublishStep {
@@ -227,8 +276,8 @@ export default function AdminPanel() {
 
 
   // Use raw.githubusercontent for admin (no CDN cache) — jsdelivr caches aggressively
-  // Data path from env var — single source of truth, never hardcode kb-v2/kb-v3
-  const DATA_PATH = process.env.NEXT_PUBLIC_KB_DATA_PATH || 'kb-v3';
+  // Data path from env var — single source of truth, never hardcode
+  const DATA_PATH = process.env.NEXT_PUBLIC_KB_DATA_PATH || 'kb-v4';
   const BASE_IMAGE_URL = `https://raw.githubusercontent.com/iFrugal/json-data-keeper/main/${DATA_PATH}`;
 
   // NOTE: Composite image generation removed — now using separate text approach
@@ -286,17 +335,70 @@ export default function AdminPanel() {
     }
   };
 
-  // Fetch Products
+  // Fetch ALL products from flat file (master/products/all.json)
+  const fetchAllProducts = async (): Promise<{ products: FlatProduct[]; sha: string | null }> => {
+    try {
+      const response = await fetch('/api/github?action=get-file&path=master/products/all.json');
+      const data = await response.json();
+      if (data.content) {
+        const products = (data.content.products || []) as FlatProduct[];
+        setAllProducts(products);
+        setAllProductsSha(data.sha || null);
+        return { products, sha: data.sha || null };
+      }
+    } catch (error) {
+      console.warn('Flat products file not found:', error);
+    }
+    setAllProducts([]);
+    setAllProductsSha(null);
+    return { products: [], sha: null };
+  };
+
+  // Save ALL products to flat file (master/products/all.json)
+  const saveAllProducts = async (products: FlatProduct[], commitMessage: string): Promise<boolean> => {
+    // Always get fresh SHA to avoid conflicts
+    const getRes = await fetch('/api/github?action=get-file&path=master/products/all.json');
+    const getData = await getRes.json();
+
+    const response = await fetch('/api/github', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update-file',
+        path: 'master/products/all.json',
+        content: {
+          total: products.length,
+          products: products,
+        },
+        message: commitMessage,
+        sha: getData.sha,
+      }),
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      setAllProducts(products);
+      setAllProductsSha(data.sha || null);
+      return true;
+    }
+    throw new Error(data.error || 'Failed to save products');
+  };
+
+  // Fetch Products for a specific subcategory (from flat file)
   const fetchProducts = async (categoryId: string, subCategoryId: string) => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/github?action=get-file&path=master/category/${categoryId}/sub-category/${subCategoryId}/products.json`);
-      const data = await response.json();
-      if (data.content) {
-        setProducts(data.content.products || []);
-      } else {
-        setProducts([]);
+      // Load flat file if not already loaded
+      let flatProducts = allProducts;
+      if (flatProducts.length === 0) {
+        const result = await fetchAllProducts();
+        flatProducts = result.products;
       }
+      // Filter by category and subcategory
+      const filtered = flatProducts.filter(
+        p => p.categoryId === categoryId && p.subCategoryId === subCategoryId
+      );
+      setProducts(filtered);
     } catch (error) {
       console.warn('Products not found — starting with empty state:', error);
       setProducts([]);
@@ -940,6 +1042,12 @@ export default function AdminPanel() {
       showMessage('error', 'Please fill all required fields');
       return;
     }
+    // Validate pcsPerUnit if the unit requires it
+    const selectedUnit = unitOptions.find(u => u.label === addFormData.unit);
+    if (selectedUnit?.showPricePerPiece && (!addFormData.pcsPerUnit || addFormData.pcsPerUnit < 1)) {
+      showMessage('error', 'Please enter Pieces Per Unit for the selected unit');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -956,9 +1064,9 @@ export default function AdminPanel() {
         uploadedImageUrls.push(imageUrl);
       }
 
-      // Create new product with timestamps
+      // Create new product with timestamps + flat metadata
       const now = new Date().toISOString();
-      const newProduct: Product = {
+      const newProduct: FlatProduct = {
         _id: productId,
         name: addFormData.name,
         image: uploadedImageUrls.length > 0 ? uploadedImageUrls : addFormData.image || [],
@@ -966,48 +1074,40 @@ export default function AdminPanel() {
         stock: addFormData.stock || 0,
         price: addFormData.price || 0,
         discount: addFormData.discount || 0,
+        ...(addFormData.pcsPerUnit ? { pcsPerUnit: addFormData.pcsPerUnit } : {}),
         description: addFormData.description || '',
         more_details: addFormData.more_details || defaultMoreDetails,
         publish: addFormData.publish !== false,
         createdAt: now,
         updatedAt: now,
         updatedBy: session?.user?.email || 'unknown',
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.name,
+        categoryOrder: selectedCategory.order,
+        subCategoryId: selectedSubCategory.id,
+        subCategoryName: selectedSubCategory.name,
+        subCategoryOrder: selectedSubCategory.order,
       };
 
-      const updatedProducts = [...products, newProduct];
-
-      // Save to GitHub
-      const response = await fetch('/api/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update-file',
-          path: `master/category/${selectedCategory.id}/sub-category/${selectedSubCategory.id}/products.json`,
-          content: {
-            parent: {
-              category_id: selectedCategory.id,
-              category_name: selectedCategory.name,
-              subcategory_id: selectedSubCategory.id,
-              subcategory_name: selectedSubCategory.name
-            },
-            total: updatedProducts.length,
-            products: updatedProducts
-          },
-          message: `Add product: ${newProduct.name}`,
-        }),
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        setProducts(updatedProducts);
-        setFormMode(null);
-        setAddFormData({});
-        setProductImages([]);
-        setShowMoreDetails(false);
-        showMessage('success', 'Product added successfully');
-      } else {
-        showMessage('error', data.error || 'Failed to add product');
+      // Load latest flat file if not loaded
+      let currentProducts = allProducts;
+      if (currentProducts.length === 0) {
+        const result = await fetchAllProducts();
+        currentProducts = result.products;
       }
+
+      const updatedAllProducts = [...currentProducts, newProduct];
+
+      // Save to flat file
+      await saveAllProducts(updatedAllProducts, `Add product: ${newProduct.name}`);
+
+      // Update current subcategory view
+      setProducts(prev => [...prev, newProduct]);
+      setFormMode(null);
+      setAddFormData({});
+      setProductImages([]);
+      setShowMoreDetails(false);
+      showMessage('success', 'Product added successfully');
     } catch (error) {
       showMessage('error', 'Failed to add product');
     } finally {
@@ -1234,9 +1334,15 @@ export default function AdminPanel() {
     setEditProductImages(product.image.map(img => ({ preview: img, isExisting: true })));
   };
 
-  // Save product
+  // Save product (to flat file)
   const saveProduct = async () => {
     if (!editFormData || !selectedCategory || !selectedSubCategory) return;
+    // Validate pcsPerUnit if the unit requires it
+    const editSelectedUnit = unitOptions.find(u => u.label === editFormData.unit);
+    if (editSelectedUnit?.showPricePerPiece && (!editFormData.pcsPerUnit || editFormData.pcsPerUnit < 1)) {
+      showMessage('error', 'Please enter Pieces Per Unit for the selected unit');
+      return;
+    }
     setLoading(true);
     try {
       // Upload new images and keep existing ones
@@ -1253,52 +1359,40 @@ export default function AdminPanel() {
         }
       }
 
-      const updatedProduct = {
+      const updatedProduct: FlatProduct = {
         ...editFormData,
         image: finalImageUrls.length > 0 ? finalImageUrls : editFormData.image,
         updatedAt: new Date().toISOString(),
         updatedBy: session?.user?.email || 'unknown',
+        // Preserve/update flat metadata
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.name,
+        categoryOrder: selectedCategory.order,
+        subCategoryId: selectedSubCategory.id,
+        subCategoryName: selectedSubCategory.name,
+        subCategoryOrder: selectedSubCategory.order,
       };
 
-      const updatedProducts = products.map(prod =>
-        prod._id === editFormData._id ? updatedProduct : prod
+      // Update in flat file
+      let currentProducts = allProducts;
+      if (currentProducts.length === 0) {
+        const result = await fetchAllProducts();
+        currentProducts = result.products;
+      }
+
+      const updatedAllProducts = currentProducts.map(p =>
+        p._id === editFormData._id ? updatedProduct : p
       );
 
-      const getResponse = await fetch(`/api/github?action=get-file&path=master/category/${selectedCategory.id}/sub-category/${selectedSubCategory.id}/products.json`);
-      const getData = await getResponse.json();
+      await saveAllProducts(updatedAllProducts, `Update product: ${editFormData.name}`);
 
-      const response = await fetch('/api/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update-file',
-          path: `master/category/${selectedCategory.id}/sub-category/${selectedSubCategory.id}/products.json`,
-          content: {
-            parent: {
-              category_id: selectedCategory.id,
-              category_name: selectedCategory.name,
-              subcategory_id: selectedSubCategory.id,
-              subcategory_name: selectedSubCategory.name
-            },
-            total: updatedProducts.length,
-            products: updatedProducts
-          },
-          message: `Update product: ${editFormData.name}`,
-          sha: getData.sha,
-        }),
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        setProducts(updatedProducts);
-        setEditingProductId(null);
-        setEditFormData(null);
-        setEditProductImages([]);
-        setShowMoreDetails(false);
-        showMessage('success', 'Product updated successfully');
-      } else {
-        showMessage('error', data.error || 'Failed to update product');
-      }
+      // Update current subcategory view
+      setProducts(prev => prev.map(p => p._id === editFormData._id ? updatedProduct : p));
+      setEditingProductId(null);
+      setEditFormData(null);
+      setEditProductImages([]);
+      setShowMoreDetails(false);
+      showMessage('success', 'Product updated successfully');
     } catch (error) {
       showMessage('error', 'Failed to save product');
     } finally {
@@ -1306,46 +1400,27 @@ export default function AdminPanel() {
     }
   };
 
-  // Delete product
+  // Delete product (from flat file)
   const deleteProduct = async (product: Product) => {
     if (!confirm(`Are you sure you want to delete "${product.name}"?`)) return;
     if (!selectedCategory || !selectedSubCategory) return;
 
     setLoading(true);
     try {
-      const updatedProducts = products.filter(prod => prod._id !== product._id);
-
-      const getResponse = await fetch(`/api/github?action=get-file&path=master/category/${selectedCategory.id}/sub-category/${selectedSubCategory.id}/products.json`);
-      const getData = await getResponse.json();
-
-      const response = await fetch('/api/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update-file',
-          path: `master/category/${selectedCategory.id}/sub-category/${selectedSubCategory.id}/products.json`,
-          content: {
-            parent: {
-              category_id: selectedCategory.id,
-              category_name: selectedCategory.name,
-              subcategory_id: selectedSubCategory.id,
-              subcategory_name: selectedSubCategory.name
-            },
-            total: updatedProducts.length,
-            products: updatedProducts
-          },
-          message: `Delete product: ${product.name}`,
-          sha: getData.sha,
-        }),
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        setProducts(updatedProducts);
-        showMessage('success', 'Product deleted successfully');
-      } else {
-        showMessage('error', data.error || 'Failed to delete product');
+      // Load flat file if not loaded
+      let currentProducts = allProducts;
+      if (currentProducts.length === 0) {
+        const result = await fetchAllProducts();
+        currentProducts = result.products;
       }
+
+      const updatedAllProducts = currentProducts.filter(p => p._id !== product._id);
+
+      await saveAllProducts(updatedAllProducts, `Delete product: ${product.name}`);
+
+      // Update current subcategory view
+      setProducts(prev => prev.filter(p => p._id !== product._id));
+      showMessage('success', 'Product deleted successfully');
     } catch (error) {
       showMessage('error', 'Failed to delete product');
     } finally {
@@ -1383,7 +1458,7 @@ export default function AdminPanel() {
         setLoading(false);
         return;
       }
-      const newUnit: UnitOption = { id, label: label.trim(), order: unitOptions.length + 1, types };
+      const newUnit: UnitOption = { id, label: label.trim(), order: unitOptions.length + 1, types, showPricePerPiece: newUnitShowPricePerPiece };
       const updated = [...unitOptions, newUnit];
       // Add any new types
       const allTypes = Array.from(new Set([...unitTypes, ...types]));
@@ -1443,6 +1518,192 @@ export default function AdminPanel() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Load all products for Stock & Price management (single flat file fetch)
+  const loadAllProductsForStockPrice = async () => {
+    setStockPriceLoading(true);
+    setStockPricePage(1);
+    try {
+      // Single fetch from flat file instead of 49+ nested calls
+      const result = await fetchAllProducts();
+      const flatProducts = result.products;
+
+      const allRows: StockPriceRow[] = flatProducts.map(prod => ({
+        productId: prod._id,
+        productName: prod.name,
+        categoryId: prod.categoryId,
+        categoryName: prod.categoryName,
+        subCategoryId: prod.subCategoryId,
+        subCategoryName: prod.subCategoryName,
+        categoryOrder: prod.categoryOrder ?? 999,
+        subCategoryOrder: prod.subCategoryOrder ?? 999,
+        productOrder: 0,
+        unit: prod.unit,
+        pcsPerUnit: prod.pcsPerUnit,
+        originalPrice: prod.price,
+        originalStock: prod.stock,
+        price: prod.price,
+        stock: prod.stock,
+        discount: prod.discount,
+      }));
+
+      // Sort by category order → subcategory order
+      allRows.sort((a, b) => {
+        if (a.categoryOrder !== b.categoryOrder) return a.categoryOrder - b.categoryOrder;
+        return a.subCategoryOrder - b.subCategoryOrder;
+      });
+
+      setStockPriceRows(allRows);
+    } catch (error) {
+      showMessage('error', 'Failed to load products');
+    } finally {
+      setStockPriceLoading(false);
+    }
+  };
+
+  // Save stock & price changes to flat file (single write instead of grouped writes)
+  const publishStockPriceChanges = async () => {
+    const changedRows = stockPriceRows.filter(r => r.price !== r.originalPrice || r.stock !== r.originalStock);
+    if (changedRows.length === 0) return;
+
+    setStockPriceLoading(true);
+    setShowStockPricePublish(false);
+    try {
+      // Fetch latest flat file
+      const result = await fetchAllProducts();
+      let flatProducts = result.products;
+
+      // Apply changes
+      const now = new Date().toISOString();
+      const email = session?.user?.email || 'unknown';
+
+      flatProducts = flatProducts.map(prod => {
+        const changed = changedRows.find(r => r.productId === prod._id);
+        if (changed) {
+          return {
+            ...prod,
+            price: changed.price,
+            stock: changed.stock,
+            updatedAt: now,
+            updatedBy: email,
+          };
+        }
+        return prod;
+      });
+
+      // Single write
+      await saveAllProducts(flatProducts, `Update stock & price: ${changedRows.length} product(s)`);
+
+      // Update original values to current after save
+      setStockPriceRows(prev => prev.map(r => ({ ...r, originalPrice: r.price, originalStock: r.stock })));
+      showMessage('success', `Updated ${changedRows.length} product(s)`);
+    } catch (error) {
+      showMessage('error', 'Failed to save changes');
+    } finally {
+      setStockPriceLoading(false);
+    }
+  };
+
+  // Download stock & price data as Excel
+  const downloadStockPriceExcel = () => {
+    const data = stockPriceRows.map(r => ({
+      'Product ID': r.productId,
+      'Product Name': r.productName,
+      'Category': r.categoryName,
+      'Sub Category': r.subCategoryName,
+      'Unit': r.unit,
+      'Price': r.price,
+      'Stock': r.stock,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 16 }, // Product ID
+      { wch: 35 }, // Product Name
+      { wch: 18 }, // Category
+      { wch: 18 }, // Sub Category
+      { wch: 12 }, // Unit
+      { wch: 10 }, // Price
+      { wch: 10 }, // Stock
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock & Price');
+    XLSX.writeFile(wb, `KB_Masale_Stock_Price_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showMessage('success', 'Excel downloaded');
+  };
+
+  // Upload Excel and apply changes
+  const handleStockPriceExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target?.result, { type: 'binary' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows: any[] = XLSX.utils.sheet_to_json(ws);
+
+        if (rows.length === 0) {
+          showMessage('error', 'Excel file is empty');
+          return;
+        }
+
+        // Validate required columns exist
+        const firstRow = rows[0];
+        const requiredCols = ['Product ID', 'Price', 'Stock'];
+        const missingCols = requiredCols.filter(col => !(col in firstRow));
+        if (missingCols.length > 0) {
+          showMessage('error', `Invalid Excel format. Missing columns: ${missingCols.join(', ')}. Please use the downloaded template.`);
+          return;
+        }
+
+        let updatedCount = 0;
+        let matchedCount = 0;
+
+        setStockPriceRows(prev => {
+          const updated = [...prev];
+          for (const excelRow of rows) {
+            const id = String(excelRow['Product ID'] || '').trim();
+            if (!id) continue;
+            const match = updated.find(r => r.productId === id);
+            if (!match) continue;
+            matchedCount++;
+            // Only read Price and Stock — ignore all other columns
+            const newPrice = parseFloat(excelRow['Price']);
+            const newStock = parseInt(excelRow['Stock']);
+            if (!isNaN(newPrice) && newPrice !== match.price) {
+              match.price = newPrice;
+              updatedCount++;
+            }
+            if (!isNaN(newStock) && newStock !== match.stock) {
+              match.stock = newStock;
+              updatedCount++;
+            }
+          }
+          return updated;
+        });
+
+        if (matchedCount === 0) {
+          showMessage('error', 'No matching Product IDs found. Ensure the Excel has valid Product IDs.');
+        } else {
+          showMessage('success', `Excel applied — ${matchedCount} products matched, ${updatedCount} field(s) changed`);
+        }
+      } catch {
+        showMessage('error', 'Failed to read Excel file. Ensure it is a valid .xlsx file.');
+      }
+    };
+    reader.readAsBinaryString(file);
+    // Reset input so same file can be re-uploaded
+    e.target.value = '';
+  };
+
+  // Mark all products out of stock
+  const markAllOutOfStock = () => {
+    setStockPriceRows(prev => prev.map(r => ({ ...r, stock: 0 })));
+    setMarkOutOfStockStep(0);
+    setMarkOutOfStockInput('');
+    showMessage('success', 'All products marked out of stock. Review and click Publish to save.');
   };
 
   // Navigate to subcategories
@@ -1635,11 +1896,11 @@ export default function AdminPanel() {
     return (
       <div className="border relative py-2 lg:p-4 grid gap-1 lg:gap-3 min-w-[120px] lg:min-w-[180px] rounded cursor-pointer bg-white hover:shadow-lg transition-shadow group">
         {/* Image Carousel */}
-        <div className="min-h-20 w-full max-h-24 lg:max-h-32 rounded overflow-hidden relative">
+        <div className="w-full aspect-square rounded overflow-hidden relative p-2">
           <img
             src={images[currentImageIndex] || ''}
             alt={product.name}
-            className="w-full h-full object-scale-down lg:scale-110"
+            className="w-full h-full object-contain"
             onError={(e) => {
               e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999" font-size="10">No Image</text></svg>';
             }}
@@ -1711,7 +1972,7 @@ export default function AdminPanel() {
         </div>
 
         <div className="w-fit gap-1 px-2 lg:px-0 text-sm lg:text-base text-gray-500">
-          {product.unit}
+          {product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''}
         </div>
 
         <div className="px-2 lg:px-0 flex items-center justify-between gap-1 lg:gap-3 text-sm lg:text-base">
@@ -1722,6 +1983,11 @@ export default function AdminPanel() {
             {Boolean(product.discount) && (
               <div className="text-sm text-gray-400 line-through">
                 {DisplayPriceInRupees(product.price)}
+              </div>
+            )}
+            {product.pcsPerUnit && product.pcsPerUnit > 1 && (
+              <div className="text-xs text-gray-500">
+                {DisplayPriceInRupees(discountedPrice / product.pcsPerUnit)}/pc
               </div>
             )}
           </div>
@@ -1815,7 +2081,7 @@ export default function AdminPanel() {
             <div className="space-y-4">
               <span className="bg-green-300 text-green-800 px-2 py-1 rounded-full text-sm">10 Min</span>
               <h1 className="text-2xl font-semibold">{product.name}</h1>
-              <p className="text-gray-500">{product.unit}</p>
+              <p className="text-gray-500">{product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''}</p>
 
               <div className="border-t pt-4">
                 <p className="text-gray-500 text-sm">Price</p>
@@ -1830,6 +2096,11 @@ export default function AdminPanel() {
                     </>
                   )}
                 </div>
+                {product.pcsPerUnit && product.pcsPerUnit > 1 && (
+                  <p className="text-sm text-gray-500 mt-1">
+                    {product.unit} &middot; {DisplayPriceInRupees(discountedPrice / product.pcsPerUnit)}/pc
+                  </p>
+                )}
               </div>
 
               {product.stock === 0 ? (
@@ -1847,7 +2118,7 @@ export default function AdminPanel() {
                 </div>
                 <div>
                   <p className="font-semibold">Unit</p>
-                  <p className="text-gray-600 text-sm">{product.unit}</p>
+                  <p className="text-gray-600 text-sm">{product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''}</p>
                 </div>
                 {product.more_details && Object.entries(product.more_details).map(([key, value]) => (
                   value && (
@@ -2092,6 +2363,29 @@ export default function AdminPanel() {
                       </select>
                     </div>
                   </div>
+
+                  {/* Pieces Per Unit — shown only when selected unit has showPricePerPiece */}
+                  {addFormData.unit && unitOptions.find(u => u.label === addFormData.unit)?.showPricePerPiece && (
+                    <div className="max-w-xs">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Pieces Per Unit *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="99999"
+                        value={addFormData.pcsPerUnit ?? ''}
+                        onChange={(e) => setAddFormData({ ...addFormData, pcsPerUnit: e.target.value === '' ? undefined : parseInt(e.target.value) })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="e.g. 20"
+                      />
+                      {addFormData.price > 0 && addFormData.pcsPerUnit > 0 && (
+                        <p className="text-xs text-green-600 mt-1">
+                          Price/Pc: ₹{(priceWithDiscount(addFormData.price, addFormData.discount || 0) / addFormData.pcsPerUnit).toFixed(2)}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -2609,6 +2903,7 @@ export default function AdminPanel() {
                 addUnitOption(newUnitLabel, newUnitTypes);
                 setNewUnitLabel('');
                 setNewUnitTypes([]);
+                setNewUnitShowPricePerPiece(false);
               }
             }}
             disabled={loading || !newUnitLabel.trim() || newUnitTypes.length === 0}
@@ -2618,7 +2913,7 @@ export default function AdminPanel() {
             Add
           </button>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 mb-3">
           <span className="text-xs text-gray-500 py-1">Tags:</span>
           {unitTypes.map((t) => (
             <button
@@ -2634,6 +2929,18 @@ export default function AdminPanel() {
               {t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="new-unit-price-per-piece"
+            checked={newUnitShowPricePerPiece}
+            onChange={(e) => setNewUnitShowPricePerPiece(e.target.checked)}
+            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+          />
+          <label htmlFor="new-unit-price-per-piece" className="text-sm text-gray-600">
+            Show Price/Pc <span className="text-xs text-gray-400">(products with this unit must enter pieces per unit)</span>
+          </label>
         </div>
       </div>
 
@@ -2666,6 +2973,81 @@ export default function AdminPanel() {
         ) : (
           filtered.map((unit, index) => {
             const globalIndex = unitOptions.findIndex(u => u.id === unit.id);
+            const isEditing = editingUnitId === unit.id;
+
+            if (isEditing) {
+              return (
+                <div key={unit.id} className="px-4 py-3 bg-blue-50 space-y-3">
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      value={editUnitLabel}
+                      onChange={(e) => setEditUnitLabel(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                    <button
+                      onClick={async () => {
+                        if (!editUnitLabel.trim()) return;
+                        setLoading(true);
+                        const updated = unitOptions.map(u =>
+                          u.id === unit.id
+                            ? { ...u, label: editUnitLabel.trim(), types: editUnitTypes, showPricePerPiece: editUnitShowPricePerPiece }
+                            : u
+                        );
+                        const data = await saveUnitsToGitHub(updated, unitTypes, `Update unit: ${editUnitLabel}`);
+                        if (data.success) {
+                          setUnitOptions(updated);
+                          showMessage('success', `Unit updated`);
+                        } else {
+                          showMessage('error', data.error || 'Failed to update unit');
+                        }
+                        setEditingUnitId(null);
+                        setLoading(false);
+                      }}
+                      disabled={loading || !editUnitLabel.trim()}
+                      className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+                    >
+                      <Save className="w-4 h-4" />
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingUnitId(null)}
+                      className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="text-xs text-gray-500 py-1">Tags:</span>
+                    {unitTypes.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setEditUnitTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])}
+                        className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${
+                          editUnitTypes.includes(t) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`edit-unit-ppc-${unit.id}`}
+                      checked={editUnitShowPricePerPiece}
+                      onChange={(e) => setEditUnitShowPricePerPiece(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <label htmlFor={`edit-unit-ppc-${unit.id}`} className="text-sm text-gray-600">
+                      Show Price/Pc
+                    </label>
+                  </div>
+                </div>
+              );
+            }
+
             return (
             <div key={unit.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
               <div className="flex items-center gap-3">
@@ -2676,8 +3058,24 @@ export default function AdminPanel() {
                     <span key={t} className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-xs">{t}</span>
                   ))}
                 </div>
+                {unit.showPricePerPiece && (
+                  <span className="px-1.5 py-0.5 bg-green-50 text-green-600 rounded text-xs">Price/Pc</span>
+                )}
               </div>
               <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    setEditingUnitId(unit.id);
+                    setEditUnitLabel(unit.label);
+                    setEditUnitTypes(unit.types);
+                    setEditUnitShowPricePerPiece(unit.showPricePerPiece || false);
+                  }}
+                  disabled={loading}
+                  className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-30"
+                  title="Edit"
+                >
+                  <Edit className="w-4 h-4" />
+                </button>
                 <button
                   onClick={() => reorderUnits(globalIndex, 'up')}
                   disabled={globalIndex === 0 || loading}
@@ -2712,6 +3110,360 @@ export default function AdminPanel() {
     );
   };
 
+  // Render Stock & Price Management
+  const renderStockPrice = () => {
+    const changedRows = stockPriceRows.filter(r => r.price !== r.originalPrice || r.stock !== r.originalStock);
+    const totalPages = Math.ceil(stockPriceRows.length / stockPricePageSize);
+    const paginatedRows = stockPriceRows.slice(
+      (stockPricePage - 1) * stockPricePageSize,
+      stockPricePage * stockPricePageSize
+    );
+
+    return (
+      <div className="space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setViewMode('dashboard')}
+              className="p-2 hover:bg-gray-100 rounded-lg transition"
+            >
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+            <h2 className="text-2xl font-bold text-gray-900">Manage Stock & Price</h2>
+            <span className="text-sm text-gray-500">({stockPriceRows.length} products)</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Mark All Out of Stock */}
+            <button
+              onClick={() => setMarkOutOfStockStep(1)}
+              disabled={stockPriceLoading || stockPriceRows.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 border border-red-300 text-red-600 rounded-lg text-sm hover:bg-red-50 transition disabled:opacity-50"
+            >
+              <AlertTriangle className="w-4 h-4" />
+              Mark All Out of Stock
+            </button>
+            {/* Excel Download */}
+            <button
+              onClick={downloadStockPriceExcel}
+              disabled={stockPriceLoading || stockPriceRows.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              Download Excel
+            </button>
+            {/* Excel Upload */}
+            <label className={`flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition cursor-pointer ${stockPriceLoading || stockPriceRows.length === 0 ? 'opacity-50 pointer-events-none' : ''}`}>
+              <Upload className="w-4 h-4" />
+              Upload Excel
+              <input type="file" accept=".xlsx,.xls" onChange={handleStockPriceExcelUpload} className="hidden" />
+            </label>
+            {/* Page size dropdown */}
+            <select
+              value={stockPricePageSize}
+              onChange={(e) => { setStockPricePageSize(parseInt(e.target.value)); setStockPricePage(1); }}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+            >
+              <option value={20}>20 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </select>
+            {/* Publish button */}
+            <button
+              onClick={() => setShowStockPricePublish(true)}
+              disabled={changedRows.length === 0 || stockPriceLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Rocket className="w-4 h-4" />
+              Publish Changes {changedRows.length > 0 && `(${changedRows.length})`}
+            </button>
+          </div>
+        </div>
+
+        {stockPriceLoading && stockPriceRows.length === 0 ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            <span className="ml-3 text-gray-500">Loading all products...</span>
+          </div>
+        ) : (
+          <>
+            {/* Table */}
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50 border-b text-left text-sm font-medium text-gray-500">
+                    <th className="px-4 py-3 w-8">#</th>
+                    <th className="px-4 py-3">Product</th>
+                    <th className="px-4 py-3 w-36">Price (₹)</th>
+                    <th className="px-4 py-3 w-36">Stock</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {paginatedRows.map((row, idx) => {
+                    const globalIdx = (stockPricePage - 1) * stockPricePageSize + idx + 1;
+                    const priceChanged = row.price !== row.originalPrice;
+                    const stockChanged = row.stock !== row.originalStock;
+                    const isChanged = priceChanged || stockChanged;
+
+                    return (
+                      <tr
+                        key={row.productId}
+                        className={isChanged ? 'bg-yellow-50' : 'hover:bg-gray-50'}
+                      >
+                        <td className="px-4 py-2.5 text-xs text-gray-400">{globalIdx}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="font-medium text-gray-900">{row.productName}</div>
+                          <div className="text-xs text-gray-400 mt-0.5">
+                            {row.categoryName}/{row.subCategoryName}
+                            {row.unit && <span className="ml-2 text-gray-500">· {row.unit}{row.pcsPerUnit && row.pcsPerUnit > 1 ? ` (${row.pcsPerUnit} pcs)` : ''}</span>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <input
+                            type="number"
+                            min="0"
+                            value={row.price}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                              setStockPriceRows(prev => prev.map(r => r.productId === row.productId ? { ...r, price: val } : r));
+                            }}
+                            className={`w-28 px-2 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 ${
+                              priceChanged ? 'border-yellow-400 bg-yellow-50 font-semibold' : 'border-gray-300'
+                            }`}
+                          />
+                          {priceChanged && (
+                            <div className="text-xs mt-0.5 text-orange-600">
+                              ₹{row.originalPrice.toLocaleString('en-IN')} → ₹{row.price.toLocaleString('en-IN')}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <input
+                            type="number"
+                            min="0"
+                            value={row.stock}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? 0 : parseInt(e.target.value);
+                              setStockPriceRows(prev => prev.map(r => r.productId === row.productId ? { ...r, stock: val } : r));
+                            }}
+                            className={`w-28 px-2 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 ${
+                              stockChanged ? 'border-yellow-400 bg-yellow-50 font-semibold' : 'border-gray-300'
+                            }`}
+                          />
+                          {stockChanged && (
+                            <div className="text-xs mt-0.5 text-orange-600">
+                              {row.originalStock} → {row.stock}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between bg-white px-4 py-3 rounded-lg shadow-md">
+                <p className="text-sm text-gray-500">
+                  Page {stockPricePage} of {totalPages} · {stockPriceRows.length} products
+                  {changedRows.length > 0 && <span className="ml-2 text-orange-600 font-medium">· {changedRows.length} modified</span>}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setStockPricePage(p => Math.max(1, p - 1))}
+                    disabled={stockPricePage === 1}
+                    className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50 disabled:opacity-30"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    let page: number;
+                    if (totalPages <= 7) {
+                      page = i + 1;
+                    } else if (stockPricePage <= 4) {
+                      page = i + 1;
+                    } else if (stockPricePage >= totalPages - 3) {
+                      page = totalPages - 6 + i;
+                    } else {
+                      page = stockPricePage - 3 + i;
+                    }
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setStockPricePage(page)}
+                        className={`px-3 py-1.5 rounded-lg text-sm ${
+                          stockPricePage === page ? 'bg-blue-600 text-white' : 'border hover:bg-gray-50'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={() => setStockPricePage(p => Math.min(totalPages, p + 1))}
+                    disabled={stockPricePage === totalPages}
+                    className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50 disabled:opacity-30"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Publish Confirmation Modal */}
+        {showStockPricePublish && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+              <div className="p-4 border-b flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Review Changes ({changedRows.length} items)</h3>
+                <button onClick={() => setShowStockPricePublish(false)} className="p-1 hover:bg-gray-100 rounded">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="overflow-y-auto flex-1 p-4">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b">
+                      <th className="pb-2">Product</th>
+                      <th className="pb-2">Price</th>
+                      <th className="pb-2">Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {changedRows.map(row => (
+                      <tr key={row.productId}>
+                        <td className="py-2">
+                          <div className="font-medium">{row.productName}</div>
+                          <div className="text-xs text-gray-400">{row.categoryName}/{row.subCategoryName}</div>
+                        </td>
+                        <td className="py-2">
+                          {row.price !== row.originalPrice ? (
+                            <span className="text-orange-600 font-medium">
+                              ₹{row.originalPrice.toLocaleString('en-IN')} → ₹{row.price.toLocaleString('en-IN')}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">₹{row.price.toLocaleString('en-IN')}</span>
+                          )}
+                        </td>
+                        <td className="py-2">
+                          {row.stock !== row.originalStock ? (
+                            <span className="text-orange-600 font-medium">
+                              {row.originalStock} → {row.stock}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">{row.stock}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="p-4 border-t flex justify-end gap-3">
+                <button
+                  onClick={() => setShowStockPricePublish(false)}
+                  className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={publishStockPriceChanges}
+                  disabled={stockPriceLoading}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {stockPriceLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                  Yes, Proceed & Publish
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mark All Out of Stock — Step 1: Warning */}
+        {markOutOfStockStep === 1 && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-red-100 rounded-full">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900">Mark All Products Out of Stock?</h3>
+              </div>
+              <p className="text-sm text-gray-600 mb-2">
+                This will set stock to <span className="font-bold text-red-600">0</span> for all <span className="font-bold">{stockPriceRows.length} products</span> across every category.
+              </p>
+              <p className="text-sm text-gray-600 mb-6">
+                All products will show <span className="font-medium text-red-600">&quot;Out of Stock&quot;</span> on kbmarts.com and customers won&apos;t be able to place orders.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => { setMarkOutOfStockStep(0); setMarkOutOfStockInput(''); }}
+                  className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setMarkOutOfStockStep(2)}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700"
+                >
+                  Yes, Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mark All Out of Stock — Step 2: Type to Confirm */}
+        {markOutOfStockStep === 2 && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-red-100 rounded-full">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900">Final Confirmation</h3>
+              </div>
+              <p className="text-sm text-gray-600 mb-2">
+                You are about to set stock = 0 for <span className="font-bold">{stockPriceRows.length} products</span>.
+                This action will take effect when you click &quot;Publish Changes&quot;.
+              </p>
+              <p className="text-sm text-gray-700 font-medium mb-3">
+                Type <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-red-600">OUT OF STOCK</span> to confirm:
+              </p>
+              <input
+                type="text"
+                value={markOutOfStockInput}
+                onChange={(e) => setMarkOutOfStockInput(e.target.value)}
+                placeholder="Type here..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 mb-4"
+                autoFocus
+              />
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => { setMarkOutOfStockStep(0); setMarkOutOfStockInput(''); }}
+                  className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={markAllOutOfStock}
+                  disabled={markOutOfStockInput.replace(/\s+/g, '').toLowerCase() !== 'outofstock'}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Render Dashboard
   const renderDashboard = () => (
     <div className="space-y-6">
@@ -2741,6 +3493,13 @@ export default function AdminPanel() {
           >
             <Settings className="w-4 h-4" />
             Manage Units
+          </button>
+          <button
+            onClick={() => { setViewMode('stock-price'); loadAllProductsForStockPrice(); }}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+          >
+            <Tag className="w-4 h-4" />
+            Manage Stock & Price
           </button>
         </div>
       </div>
@@ -3376,6 +4135,28 @@ export default function AdminPanel() {
                         )}
                       </select>
                     </div>
+
+                    {/* Pieces Per Unit — shown only when selected unit has showPricePerPiece */}
+                    {editFormData?.unit && unitOptions.find(u => u.label === editFormData.unit)?.showPricePerPiece && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Pieces Per Unit *</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="99999"
+                          value={editFormData?.pcsPerUnit ?? ''}
+                          onChange={(e) => setEditFormData({ ...editFormData, pcsPerUnit: e.target.value === '' ? undefined : parseInt(e.target.value) })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. 20"
+                        />
+                        {editFormData?.price > 0 && editFormData?.pcsPerUnit > 0 && (
+                          <p className="text-xs text-green-600 mt-1">
+                            Price/Pc: ₹{(priceWithDiscount(editFormData.price, editFormData.discount || 0) / editFormData.pcsPerUnit).toFixed(2)}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     <div className="flex items-center gap-2 pt-6">
                       <input
                         type="checkbox"
@@ -3463,7 +4244,7 @@ export default function AdminPanel() {
                   <div className="flex-1">
                     <h3 className="text-lg font-semibold">{product.name}</h3>
                     <p className="text-sm text-gray-500">
-                      {DisplayPriceInRupees(product.price)} | {product.unit} | Stock: {product.stock}
+                      {DisplayPriceInRupees(product.price)} | {product.unit}{product.pcsPerUnit && product.pcsPerUnit > 1 ? ` (${product.pcsPerUnit} pcs)` : ''} | Stock: {product.stock}
                       {product.discount ? ` | ${product.discount}% off` : ''}
                     </p>
                     {!product.publish && (
@@ -3645,6 +4426,7 @@ export default function AdminPanel() {
         {viewMode === 'subcategories' && renderSubCategories()}
         {viewMode === 'products' && renderProducts()}
         {viewMode === 'units' && renderUnits()}
+        {viewMode === 'stock-price' && renderStockPrice()}
       </main>
     </div>
   );

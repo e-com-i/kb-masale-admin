@@ -5,7 +5,7 @@ const GITHUB_TOKEN = process.env.KB_GITHUB_TOKEN || 'YOUR_GITHUB_TOKEN_HERE';
 const GITHUB_OWNER = 'iFrugal';
 const GITHUB_REPO = 'json-data-keeper';
 const GITHUB_BRANCH = 'main';
-const BASE_PATH = process.env.KB_DATA_PATH || 'kb-v3';
+const BASE_PATH = process.env.KB_DATA_PATH || 'kb-v4';
 
 // Vercel (for publish/deploy B2C from admin)
 const VERCEL_TOKEN = process.env.KB_VERCEL_TOKEN || '';
