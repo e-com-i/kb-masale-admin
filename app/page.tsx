@@ -322,7 +322,7 @@ export default function AdminPanel() {
   const fetchSubCategories = async (categoryId: string) => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/github?action=get-file&path=master/category/${categoryId}/sub-categories.json`);
+      const response = await fetch(`/api/github?action=get-file&path=${encodeURIComponent(`master/category/${categoryId}/sub-categories.json`)}`);
       const data = await response.json();
       if (data.content) {
         setSubcategories((data.content.subcategories || []).sort((a: SubCategory, b: SubCategory) => (a.order ?? 999) - (b.order ?? 999)));
@@ -1249,7 +1249,7 @@ export default function AdminPanel() {
         sub.id === editFormData.id ? { ...editFormData, image: imageUrl, updatedBy: session?.user?.email || 'unknown' } : sub
       );
 
-      const getResponse = await fetch(`/api/github?action=get-file&path=master/category/${selectedCategory.id}/sub-categories.json`);
+      const getResponse = await fetch(`/api/github?action=get-file&path=${encodeURIComponent(`master/category/${selectedCategory.id}/sub-categories.json`)}`);
       const getData = await getResponse.json();
 
       const response = await fetch('/api/github', {
@@ -1295,7 +1295,7 @@ export default function AdminPanel() {
     try {
       const updatedSubCategories = subcategories.filter(sub => sub.id !== subcat.id);
 
-      const getResponse = await fetch(`/api/github?action=get-file&path=master/category/${selectedCategory.id}/sub-categories.json`);
+      const getResponse = await fetch(`/api/github?action=get-file&path=${encodeURIComponent(`master/category/${selectedCategory.id}/sub-categories.json`)}`);
       const getData = await getResponse.json();
 
       const response = await fetch('/api/github', {
