@@ -39,7 +39,9 @@ import {
   ChevronUp,
   ChevronDown,
   Settings,
+  ClipboardList,
 } from 'lucide-react';
+import OrdersPanel from '@/components/OrdersPanel';
 
 // Types
 interface UnitOption {
@@ -128,7 +130,7 @@ interface ProductsData {
   products: Product[];
 }
 
-type ViewMode = 'dashboard' | 'categories' | 'subcategories' | 'products' | 'units' | 'stock-price';
+type ViewMode = 'dashboard' | 'categories' | 'subcategories' | 'products' | 'units' | 'stock-price' | 'orders';
 type FormMode = 'add-category' | 'add-subcategory' | 'add-product' | null;
 
 // Helper: get fresh image URL — bypass CDN/browser cache for admin
@@ -3501,6 +3503,13 @@ export default function AdminPanel() {
             <Tag className="w-4 h-4" />
             Manage Stock & Price
           </button>
+          <button
+            onClick={() => setViewMode('orders')}
+            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition"
+          >
+            <ClipboardList className="w-4 h-4" />
+            Manage Orders
+          </button>
         </div>
       </div>
 
@@ -4427,6 +4436,7 @@ export default function AdminPanel() {
         {viewMode === 'products' && renderProducts()}
         {viewMode === 'units' && renderUnits()}
         {viewMode === 'stock-price' && renderStockPrice()}
+        {viewMode === 'orders' && <OrdersPanel onBack={() => setViewMode('dashboard')} />}
       </main>
     </div>
   );
